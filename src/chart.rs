@@ -1,0 +1,281 @@
+use std::ops::Bound;
+use std::{io, ops::RangeBounds};
+use std::io::prelude::*;
+use std::path::Path;
+
+use svg::node::element::Group;
+use svg::Document;
+
+use num_traits::Float;
+
+use mzdata::{
+    self,
+    prelude::*,
+    spectrum::{BinaryArrayMap, MultiLayerSpectrum, SignalContinuity},
+};
+
+use mzpeaks::{CentroidLike, DeconvolutedCentroidLike, MZLocated, MZPeakSetType, MassPeakSetType};
+
+use crate::axes::{AxisLabelOptions, AxisTickLabelStyle, XAxis, YAxis};
+use crate::series::{
+    CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, SeriesDescription,
+};
+
+#[derive(Debug, Clone)]
+pub struct SpectrumSVG {
+    pub document: Document,
+    pub intensity_scale: f64,
+    pub mz_scale: f64,
+    pub colors: ColorCycle,
+    pub xticks: AxisLabelOptions,
+    pub yticks: AxisLabelOptions,
+    xaxis: Option<XAxis<f64>>,
+    yaxis: Option<YAxis<f32>>,
+}
+
+impl Default for SpectrumSVG {
+    fn default() -> Self {
+        Self {
+            document: Document::new().set("width", "100%").set("height", "100%"),
+            intensity_scale: 4000.0,
+            mz_scale: 10000.0,
+            colors: Default::default(),
+            xticks: AxisLabelOptions {
+                tick_count: 7,
+                tick_font_size: 80.0,
+                label_font_size: 120.0,
+                tick_style: AxisTickLabelStyle::Precision(2),
+            },
+            yticks: AxisLabelOptions {
+                tick_count: 5,
+                tick_font_size: 80.0,
+                label_font_size: 120.0,
+                tick_style: AxisTickLabelStyle::Percentile(1),
+            },
+            xaxis: None,
+            yaxis: None,
+        }
+    }
+}
+
+impl SpectrumSVG {
+    #[allow(unused)]
+    pub fn new(
+        document: Document,
+        intensity_scale: f64,
+        mz_scale: f64,
+        colors: ColorCycle,
+        xticks: AxisLabelOptions,
+        yticks: AxisLabelOptions,
+        xaxis: Option<XAxis<f64>>,
+        yaxis: Option<YAxis<f32>>,
+    ) -> Self {
+        Self {
+            document,
+            intensity_scale,
+            mz_scale,
+            colors,
+            xticks,
+            yticks,
+            xaxis,
+            yaxis,
+        }
+    }
+
+    pub fn axes_from<
+        C: CentroidLike + Default + Clone + 'static,
+        D: DeconvolutedCentroidLike + Default + Clone + MZLocated + 'static,
+    >(
+        &mut self,
+        spectrum: &MultiLayerSpectrum<C, D>,
+    ) -> &mut Self {
+        if self.yaxis.is_none() {
+            let tic = spectrum.peaks().base_peak().intensity;
+            let yaxis = YAxis::new(
+                (tic..0.0).into(),
+                "Rel. Intensity".to_string(),
+                self.intensity_scale,
+            );
+            self.yaxis = Some(yaxis);
+        }
+
+        if self.xaxis.is_none() {
+            let (min_mz, max_mz) = spectrum
+                .acquisition()
+                .first_scan()
+                .map(|s| {
+                    s.scan_windows.iter().fold(
+                        (f64::infinity(), -f64::infinity()),
+                        |(min, max), w| {
+                            (
+                                (w.lower_bound as f64).min(min),
+                                (w.upper_bound as f64).max(max),
+                            )
+                        },
+                    )
+                })
+                .unwrap_or_else(|| (50.0, 2000.0));
+
+            let xaxis = XAxis::new(
+                (min_mz * 0.95..max_mz * 1.05).into(),
+                "m/z".to_string(),
+                self.mz_scale,
+            );
+            self.xaxis = Some(xaxis);
+        }
+
+        self
+    }
+
+    pub fn xlim(&mut self, xlim: impl RangeBounds<f64>) -> &mut Self {
+        let axis = self.xaxis.as_mut().unwrap();
+        match xlim.start_bound() {
+            Bound::Included(v) => axis.coordinates.start = *v,
+            Bound::Excluded(v) => axis.coordinates.start = *v,
+            Bound::Unbounded => {},
+        }
+
+        match xlim.end_bound() {
+            Bound::Included(v) => axis.coordinates.end = *v,
+            Bound::Excluded(v) => axis.coordinates.end = *v,
+            Bound::Unbounded => {},
+        }
+        self
+    }
+
+    fn draw_profile(&mut self, arrays: &BinaryArrayMap) -> Group {
+        let mzs = arrays.mzs().unwrap();
+        let intensities = arrays.intensities().unwrap();
+
+        let series = ContinuousSeries::from_iterators(
+            mzs.iter().copied(),
+            intensities.iter().copied(),
+            SeriesDescription::from("Profile".to_string()).with_color(self.colors.next().unwrap()),
+        )
+        .slice_x(
+            self.xaxis.as_ref().unwrap().start(),
+            self.xaxis.as_ref().unwrap().end(),
+        );
+
+        let xaxis = self.xaxis.as_ref().unwrap();
+        let yaxis = self.yaxis.as_ref().unwrap();
+
+        let sgroup = series.to_svg(&xaxis, &yaxis);
+        sgroup
+    }
+
+    fn draw_centroids<C: CentroidLike + Default + Clone + 'static>(
+        &mut self,
+        peaks: &MZPeakSetType<C>,
+    ) -> Group {
+        let series = CentroidSeries::from_iterator(
+            peaks.iter().cloned(),
+            SeriesDescription::from("Centroid".to_string()).with_color(self.colors.next().unwrap()),
+        )
+        .slice_x(
+            self.xaxis.as_ref().unwrap().start(),
+            self.xaxis.as_ref().unwrap().end(),
+        );
+
+        let xaxis = self.xaxis.as_ref().unwrap();
+        let yaxis = self.yaxis.as_ref().unwrap();
+
+        let sgroup = series.to_svg(&xaxis, &yaxis);
+        sgroup
+    }
+
+    fn draw_deconvoluted_centroids<
+        D: DeconvolutedCentroidLike + Default + Clone + MZLocated + 'static,
+    >(
+        &mut self,
+        peaks: &MassPeakSetType<D>,
+    ) -> Group {
+        let series = DeconvolutedCentroidSeries::from_iterator(
+            peaks.iter().cloned(),
+            SeriesDescription::from("Deconvolved".to_string())
+                .with_color(self.colors.next().unwrap()),
+        )
+        .slice_x(
+            self.xaxis.as_ref().unwrap().start(),
+            self.xaxis.as_ref().unwrap().end(),
+        );
+
+        let xaxis = self.xaxis.as_ref().unwrap();
+        let yaxis = self.yaxis.as_ref().unwrap();
+
+        let sgroup = series.to_svg(&xaxis, &yaxis);
+        sgroup
+    }
+
+    pub fn draw<
+        C: CentroidLike + Default + Clone + 'static,
+        D: DeconvolutedCentroidLike + Default + Clone + MZLocated + 'static,
+    >(
+        &mut self,
+        spectrum: &MultiLayerSpectrum<C, D>,
+    ) {
+        let mut groups = Vec::new();
+
+        self.axes_from(&spectrum);
+
+        // let xaxis = self.xaxis.as_ref().unwrap();
+        // let yaxis = self.yaxis.as_ref().unwrap();
+
+        if spectrum.signal_continuity() == SignalContinuity::Profile {
+            let arrays = spectrum.raw_arrays().unwrap();
+
+            let sgroup = self.draw_profile(&arrays);
+            groups.push(sgroup)
+        }
+
+        if let Some(peaks) = spectrum.peaks.as_ref() {
+            let sgroup = self.draw_centroids(peaks);
+            groups.push(sgroup)
+        }
+
+        if let Some(peaks) = spectrum.deconvoluted_peaks.as_ref() {
+            let sgroup = self.draw_deconvoluted_centroids(peaks);
+            groups.push(sgroup)
+        }
+
+        let xaxis = self.xaxis.as_ref().unwrap();
+        let yaxis = self.yaxis.as_ref().unwrap();
+
+        let xgroup = xaxis.to_svg(&self.xticks, &yaxis);
+        groups.push(xgroup);
+        let ygroup = yaxis.to_svg(&self.yticks, &xaxis);
+        groups.push(ygroup);
+
+        let container = Group::new().set(
+            "transform",
+            format!(
+                "scale(0.9,0.9)translate({}, {})",
+                self.mz_scale * 0.1,
+                self.intensity_scale * 0.05
+            ),
+        );
+        let container = groups
+            .into_iter()
+            .fold(container, |container, group| container.add(group));
+
+        self.document = self
+            .document
+            .clone()
+            .add(container)
+            .set(
+                "viewBox",
+                (0.0, 0.0, self.mz_scale * 1.08, self.intensity_scale * 1.04),
+            )
+            .set("preserveAspectRatio", "xMidYMid meet");
+    }
+
+    pub fn write<W: Write>(&self, stream: &mut W) -> io::Result<()> {
+        svg::write(stream, &self.document)?;
+        Ok(())
+    }
+
+    pub fn save<P: AsRef<Path>>(&self, path: &P) -> io::Result<()> {
+        svg::save(path, &self.document)?;
+        Ok(())
+    }
+}

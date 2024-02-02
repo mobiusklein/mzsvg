@@ -1,0 +1,20 @@
+[package]
+name = "mzsvg"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "mzsvg"
+
+[lib]
+
+
+[dependencies]
+mzdata = { path = "../mzdata", features = ["mzsignal", "nalgebra"]}
+mzpeaks = "0.9.0"
+nalgebra = "0.32.3"
+num-traits = "0.2.17"
+# resvg = "0.38.0"
+svg = "0.14.0"
