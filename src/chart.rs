@@ -2,6 +2,7 @@ use std::ops::Bound;
 use std::{io, ops::RangeBounds};
 use std::io::prelude::*;
 use std::path::Path;
+use std::mem;
 
 use svg::node::element::Group;
 use svg::Document;
@@ -18,7 +19,7 @@ use mzpeaks::{CentroidLike, DeconvolutedCentroidLike, MZLocated, MZPeakSetType, 
 
 use crate::axes::{AxisLabelOptions, AxisTickLabelStyle, XAxis, YAxis};
 use crate::series::{
-    CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, SeriesDescription,
+    CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, SeriesDescription, PlotSeries
 };
 
 #[derive(Debug, Clone)]
@@ -29,8 +30,10 @@ pub struct SpectrumSVG {
     pub colors: ColorCycle,
     pub xticks: AxisLabelOptions,
     pub yticks: AxisLabelOptions,
+    pub finished: bool,
     xaxis: Option<XAxis<f64>>,
     yaxis: Option<YAxis<f32>>,
+    groups: Vec<Group>
 }
 
 impl Default for SpectrumSVG {
@@ -38,7 +41,7 @@ impl Default for SpectrumSVG {
         Self {
             document: Document::new().set("width", "100%").set("height", "100%"),
             intensity_scale: 4000.0,
-            mz_scale: 10000.0,
+            mz_scale: 8500.0,
             colors: Default::default(),
             xticks: AxisLabelOptions {
                 tick_count: 7,
@@ -54,12 +57,13 @@ impl Default for SpectrumSVG {
             },
             xaxis: None,
             yaxis: None,
+            finished: false,
+            groups: Vec::new()
         }
     }
 }
 
 impl SpectrumSVG {
-    #[allow(unused)]
     pub fn new(
         document: Document,
         intensity_scale: f64,
@@ -69,6 +73,7 @@ impl SpectrumSVG {
         yticks: AxisLabelOptions,
         xaxis: Option<XAxis<f64>>,
         yaxis: Option<YAxis<f32>>,
+        groups: Vec<Group>
     ) -> Self {
         Self {
             document,
@@ -79,6 +84,9 @@ impl SpectrumSVG {
             yticks,
             xaxis,
             yaxis,
+            groups,
+            finished: false
+
         }
     }
 
@@ -143,16 +151,16 @@ impl SpectrumSVG {
         self
     }
 
-    fn draw_profile(&mut self, arrays: &BinaryArrayMap) -> Group {
+    pub fn draw_profile(&mut self, arrays: &BinaryArrayMap) {
         let mzs = arrays.mzs().unwrap();
         let intensities = arrays.intensities().unwrap();
 
-        let series = ContinuousSeries::from_iterators(
+        let mut series = ContinuousSeries::from_iterators(
             mzs.iter().copied(),
             intensities.iter().copied(),
             SeriesDescription::from("Profile".to_string()).with_color(self.colors.next().unwrap()),
-        )
-        .slice_x(
+        );
+        series.slice_x(
             self.xaxis.as_ref().unwrap().start(),
             self.xaxis.as_ref().unwrap().end(),
         );
@@ -161,18 +169,18 @@ impl SpectrumSVG {
         let yaxis = self.yaxis.as_ref().unwrap();
 
         let sgroup = series.to_svg(&xaxis, &yaxis);
-        sgroup
+        self.groups.push(sgroup);
     }
 
-    fn draw_centroids<C: CentroidLike + Default + Clone + 'static>(
+    pub fn draw_centroids<C: CentroidLike + Default + Clone + 'static>(
         &mut self,
         peaks: &MZPeakSetType<C>,
-    ) -> Group {
-        let series = CentroidSeries::from_iterator(
+    ) {
+        let mut series = CentroidSeries::from_iterator(
             peaks.iter().cloned(),
             SeriesDescription::from("Centroid".to_string()).with_color(self.colors.next().unwrap()),
-        )
-        .slice_x(
+        );
+        series.slice_x(
             self.xaxis.as_ref().unwrap().start(),
             self.xaxis.as_ref().unwrap().end(),
         );
@@ -181,21 +189,21 @@ impl SpectrumSVG {
         let yaxis = self.yaxis.as_ref().unwrap();
 
         let sgroup = series.to_svg(&xaxis, &yaxis);
-        sgroup
+        self.groups.push(sgroup);
     }
 
-    fn draw_deconvoluted_centroids<
+    pub fn draw_deconvoluted_centroids<
         D: DeconvolutedCentroidLike + Default + Clone + MZLocated + 'static,
     >(
         &mut self,
         peaks: &MassPeakSetType<D>,
-    ) -> Group {
-        let series = DeconvolutedCentroidSeries::from_iterator(
+    ) {
+        let mut series = DeconvolutedCentroidSeries::from_iterator(
             peaks.iter().cloned(),
             SeriesDescription::from("Deconvolved".to_string())
                 .with_color(self.colors.next().unwrap()),
-        )
-        .slice_x(
+        );
+        series.slice_x(
             self.xaxis.as_ref().unwrap().start(),
             self.xaxis.as_ref().unwrap().end(),
         );
@@ -204,18 +212,29 @@ impl SpectrumSVG {
         let yaxis = self.yaxis.as_ref().unwrap();
 
         let sgroup = series.to_svg(&xaxis, &yaxis);
-        sgroup
+        self.groups.push(sgroup)
     }
 
-    pub fn draw<
+    pub fn draw_series<S: PlotSeries<f64, f32>>(&mut self, mut series: S) {
+        series.slice_x(
+            self.xaxis.as_ref().unwrap().start(),
+            self.xaxis.as_ref().unwrap().end(),
+        );
+
+        let xaxis = self.xaxis.as_ref().unwrap();
+        let yaxis = self.yaxis.as_ref().unwrap();
+
+        let sgroup = series.to_svg(&xaxis, &yaxis);
+        self.groups.push(sgroup)
+    }
+
+    pub fn draw_spectrum<
         C: CentroidLike + Default + Clone + 'static,
         D: DeconvolutedCentroidLike + Default + Clone + MZLocated + 'static,
     >(
         &mut self,
         spectrum: &MultiLayerSpectrum<C, D>,
     ) {
-        let mut groups = Vec::new();
-
         self.axes_from(&spectrum);
 
         // let xaxis = self.xaxis.as_ref().unwrap();
@@ -224,28 +243,31 @@ impl SpectrumSVG {
         if spectrum.signal_continuity() == SignalContinuity::Profile {
             let arrays = spectrum.raw_arrays().unwrap();
 
-            let sgroup = self.draw_profile(&arrays);
-            groups.push(sgroup)
+            self.draw_profile(&arrays);
         }
 
         if let Some(peaks) = spectrum.peaks.as_ref() {
-            let sgroup = self.draw_centroids(peaks);
-            groups.push(sgroup)
+            self.draw_centroids(peaks);
         }
 
         if let Some(peaks) = spectrum.deconvoluted_peaks.as_ref() {
-            let sgroup = self.draw_deconvoluted_centroids(peaks);
-            groups.push(sgroup)
+            self.draw_deconvoluted_centroids(peaks);
         }
 
         let xaxis = self.xaxis.as_ref().unwrap();
         let yaxis = self.yaxis.as_ref().unwrap();
 
         let xgroup = xaxis.to_svg(&self.xticks, &yaxis);
-        groups.push(xgroup);
+        self.groups.push(xgroup);
         let ygroup = yaxis.to_svg(&self.yticks, &xaxis);
-        groups.push(ygroup);
+        self.groups.push(ygroup);
+    }
 
+    pub fn finish(&mut self) {
+        if self.finished {
+            return
+        };
+        self.finished = true;
         let container = Group::new().set(
             "transform",
             format!(
@@ -254,6 +276,7 @@ impl SpectrumSVG {
                 self.intensity_scale * 0.05
             ),
         );
+        let groups = mem::take(&mut self.groups);
         let container = groups
             .into_iter()
             .fold(container, |container, group| container.add(group));

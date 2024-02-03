@@ -18,16 +18,18 @@ const DEFAULT_COLOR_CYCLE: &'static [&'static str] = &[
     "crimson",
 ];
 
-
 #[derive(Debug, Clone)]
 pub struct ColorCycle {
     colors: Vec<String>,
-    index: usize
+    index: usize,
 }
 
 impl Default for ColorCycle {
     fn default() -> Self {
-        Self { colors: DEFAULT_COLOR_CYCLE.iter().map(|s| s.to_string()).collect(), index: 0 }
+        Self {
+            colors: DEFAULT_COLOR_CYCLE.iter().map(|s| s.to_string()).collect(),
+            index: 0,
+        }
     }
 }
 
@@ -44,6 +46,15 @@ impl Iterator for ColorCycle {
     }
 }
 
+// fn slice_x(self, start: X, end: X) -> Self;
+// fn slice_y(self, start: Y, end: Y) -> Self;
+pub trait PlotSeries<X: Float + Display, Y: Display + Float> {
+    fn description(&self) -> &SeriesDescription;
+    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group;
+
+    fn slice_x(&mut self, start: X, end: X);
+    fn slice_y(&mut self, start: Y, end: Y);
+}
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SeriesDescription {
@@ -74,6 +85,36 @@ pub struct ContinuousSeries<X: Float + Display, Y: Float + Display> {
     pub description: SeriesDescription,
 }
 
+impl<X: Float + Display, Y: Float + Display> PlotSeries<X, Y> for ContinuousSeries<X, Y> {
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+        self.to_svg(xaxis, yaxis)
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        let points = self
+            .points
+            .iter()
+            .copied()
+            .filter(|(x, _)| (x >= &start) && (x <= &end))
+            .collect();
+        self.points = points;
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        let points = self
+            .points
+            .iter()
+            .copied()
+            .filter(|(_, y)| (y >= &start) && (y <= &end))
+            .collect();
+        self.points = points;
+    }
+}
+
 impl<X: Float + Display, Y: Float + Display> ContinuousSeries<X, Y> {
     pub fn new(points: Vec<(X, Y)>, description: SeriesDescription) -> Self {
         Self {
@@ -91,29 +132,6 @@ impl<X: Float + Display, Y: Float + Display> ContinuousSeries<X, Y> {
             points: xiter.zip(yiter).collect(),
             description,
         }
-    }
-
-    pub fn slice_x(self, start: X, end: X) -> Self {
-        let points = self
-            .points
-            .iter()
-            .copied()
-            .filter(|(x, _)| (x >= &start) && (x <= &end))
-            .collect();
-
-        Self::new(points, self.description)
-    }
-
-    #[allow(unused)]
-    pub fn slice_y(self, start: Y, end: Y) -> Self {
-        let points = self
-            .points
-            .iter()
-            .copied()
-            .filter(|(_, y)| (y >= &start) && (y <= &end))
-            .collect();
-
-        Self::new(points, self.description)
     }
 
     pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
@@ -181,6 +199,41 @@ pub struct CentroidSeries<X: Float + Display, Y: Float + Display, T: CentroidLik
     _y: PhantomData<Y>,
 }
 
+impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static> PlotSeries<X, Y>
+    for CentroidSeries<X, Y, T>
+{
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+        self.to_svg(xaxis, yaxis)
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        let points = self
+            .peaks
+            .iter()
+            .filter(|p| (X::from(p.mz()).unwrap() >= start) && (X::from(p.mz()).unwrap() <= end))
+            .cloned()
+            .collect();
+        self.peaks = points;
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        let points = self
+            .peaks
+            .iter()
+            .filter(|p| {
+                (Y::from(p.intensity()).unwrap() >= start)
+                    && (Y::from(p.intensity()).unwrap() <= end)
+            })
+            .cloned()
+            .collect();
+        self.peaks = points;
+    }
+}
+
 impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static>
     CentroidSeries<X, Y, T>
 {
@@ -198,19 +251,51 @@ impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static>
         Self::new(peaks, description)
     }
 
-    pub fn slice_x(self, start: X, end: X) -> Self {
+    pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+        let points = peaks_to_arrays(self.peaks.iter());
+        let proxy = ContinuousSeries::new(points, self.description.clone());
+        let group = proxy.to_svg(xaxis, yaxis);
+        group
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DeconvolutedCentroidSeries<
+    X: Float + Display,
+    Y: Float + Display,
+    T: DeconvolutedCentroidLike + Clone + MZLocated + 'static,
+> {
+    pub peaks: MassPeakSetType<T>,
+    pub description: SeriesDescription,
+    _x: PhantomData<X>,
+    _y: PhantomData<Y>,
+}
+
+impl<
+        X: Float + Display,
+        Y: Float + Display,
+        T: DeconvolutedCentroidLike + Clone + MZLocated + 'static,
+    > PlotSeries<X, Y> for DeconvolutedCentroidSeries<X, Y, T>
+{
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+        self.to_svg(xaxis, yaxis)
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
         let points = self
             .peaks
             .iter()
             .filter(|p| (X::from(p.mz()).unwrap() >= start) && (X::from(p.mz()).unwrap() <= end))
             .cloned()
             .collect();
-
-        Self::new(points, self.description)
+        self.peaks = points;
     }
 
-    #[allow(unused)]
-    pub fn slice_y(self, start: Y, end: Y) -> Self {
+    fn slice_y(&mut self, start: Y, end: Y) {
         let points = self
             .peaks
             .iter()
@@ -220,31 +305,15 @@ impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static>
             })
             .cloned()
             .collect();
-
-        Self::new(points, self.description)
-    }
-
-    pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
-        let points = peaks_to_arrays(self.peaks.iter());
-        let proxy = ContinuousSeries::new(points, self.description.clone());
-        let group = proxy.to_svg(xaxis, yaxis);
-        group
+        self.peaks = points;
     }
 }
 
-
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct DeconvolutedCentroidSeries<X: Float + Display, Y: Float + Display, T: DeconvolutedCentroidLike + Clone + 'static>
-{
-    pub peaks: MassPeakSetType<T>,
-    pub description: SeriesDescription,
-    _x: PhantomData<X>,
-    _y: PhantomData<Y>,
-}
-
-
-impl<X: Float + Display, Y: Float + Display, T: DeconvolutedCentroidLike + Clone + 'static + MZLocated>
-    DeconvolutedCentroidSeries<X, Y, T>
+impl<
+        X: Float + Display,
+        Y: Float + Display,
+        T: DeconvolutedCentroidLike + Clone + 'static + MZLocated,
+    > DeconvolutedCentroidSeries<X, Y, T>
 {
     pub fn new(peaks: MassPeakSetType<T>, description: SeriesDescription) -> Self {
         Self {
@@ -258,32 +327,6 @@ impl<X: Float + Display, Y: Float + Display, T: DeconvolutedCentroidLike + Clone
     pub fn from_iterator(peaks: impl Iterator<Item = T>, description: SeriesDescription) -> Self {
         let peaks = peaks.collect();
         Self::new(peaks, description)
-    }
-
-    pub fn slice_x(self, start: X, end: X) -> Self {
-        let points = self
-            .peaks
-            .iter()
-            .filter(|p| (X::from(p.mz()).unwrap() >= start) && (X::from(p.mz()).unwrap() <= end))
-            .cloned()
-            .collect();
-
-        Self::new(points, self.description)
-    }
-
-    #[allow(unused)]
-    pub fn slice_y(self, start: Y, end: Y) -> Self {
-        let points = self
-            .peaks
-            .iter()
-            .filter(|p| {
-                (Y::from(p.intensity()).unwrap() >= start)
-                    && (Y::from(p.intensity()).unwrap() <= end)
-            })
-            .cloned()
-            .collect();
-
-        Self::new(points, self.description)
     }
 
     pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
