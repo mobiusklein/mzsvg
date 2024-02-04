@@ -237,9 +237,6 @@ impl SpectrumSVG {
     ) {
         self.axes_from(&spectrum);
 
-        // let xaxis = self.xaxis.as_ref().unwrap();
-        // let yaxis = self.yaxis.as_ref().unwrap();
-
         if spectrum.signal_continuity() == SignalContinuity::Profile {
             let arrays = spectrum.raw_arrays().unwrap();
 
