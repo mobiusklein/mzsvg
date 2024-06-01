@@ -1,11 +1,11 @@
 use std::ops::Bound;
-use std::{io, ops::RangeBounds};
+use std::{io, ops::RangeBounds, fs};
 use std::io::prelude::*;
 use std::path::Path;
 use std::mem;
 
 use svg::node::element::Group;
-use svg::Document;
+use svg::{Document, Node};
 
 use num_traits::Float;
 
@@ -36,12 +36,18 @@ pub struct SpectrumSVG {
     groups: Vec<Group>
 }
 
+
+const DEFAULT_X_SCALE: f64 = 8500.0;
+const DEFAULT_Y_SCALE: f64 = 4000.0;
+// const DEFAULT_ASPECT_RATIO: f64 = DEFAULT_X_SCALE / DEFAULT_Y_SCALE;
+
+
 impl Default for SpectrumSVG {
     fn default() -> Self {
         Self {
-            document: Document::new().set("width", "100%").set("height", "100%"),
-            intensity_scale: 4000.0,
-            mz_scale: 8500.0,
+            document: Document::new(),
+            intensity_scale: DEFAULT_Y_SCALE,
+            mz_scale: DEFAULT_X_SCALE,
             colors: Default::default(),
             xticks: AxisLabelOptions {
                 tick_count: 7,
@@ -66,8 +72,7 @@ impl Default for SpectrumSVG {
 impl SpectrumSVG {
     pub fn new(
         document: Document,
-        intensity_scale: f64,
-        mz_scale: f64,
+        aspect_ratio: f64,
         colors: ColorCycle,
         xticks: AxisLabelOptions,
         yticks: AxisLabelOptions,
@@ -75,10 +80,10 @@ impl SpectrumSVG {
         yaxis: Option<YAxis<f32>>,
         groups: Vec<Group>
     ) -> Self {
-        Self {
+        let mut inst = Self {
             document,
-            intensity_scale,
-            mz_scale,
+            intensity_scale: DEFAULT_Y_SCALE,
+            mz_scale: DEFAULT_X_SCALE,
             colors,
             xticks,
             yticks,
@@ -87,6 +92,19 @@ impl SpectrumSVG {
             groups,
             finished: false
 
+        };
+        inst.set_aspect_ratio(aspect_ratio);
+        inst
+    }
+
+    pub fn aspect_ratio(&self) -> f64 {
+        self.mz_scale / self.intensity_scale
+    }
+
+    pub fn set_aspect_ratio(&mut self, ratio: f64) {
+        self.intensity_scale = self.mz_scale / ratio;
+        if let Some(yaxis) = self.yaxis.as_mut() {
+            yaxis.scale = self.intensity_scale;
         }
     }
 
@@ -250,14 +268,6 @@ impl SpectrumSVG {
         if let Some(peaks) = spectrum.deconvoluted_peaks.as_ref() {
             self.draw_deconvoluted_centroids(peaks);
         }
-
-        let xaxis = self.xaxis.as_ref().unwrap();
-        let yaxis = self.yaxis.as_ref().unwrap();
-
-        let xgroup = xaxis.to_svg(&self.xticks, &yaxis);
-        self.groups.push(xgroup);
-        let ygroup = yaxis.to_svg(&self.yticks, &xaxis);
-        self.groups.push(ygroup);
     }
 
     pub fn finish(&mut self) {
@@ -265,7 +275,7 @@ impl SpectrumSVG {
             return
         };
         self.finished = true;
-        let container = Group::new().set(
+        let mut container = Group::new().set(
             "transform",
             format!(
                 "scale(0.9,0.9)translate({}, {})",
@@ -274,9 +284,19 @@ impl SpectrumSVG {
             ),
         );
         let groups = mem::take(&mut self.groups);
-        let container = groups
+        let inner_container = Group::new().set("class", "canvas");
+        let inner_container = groups
             .into_iter()
-            .fold(container, |container, group| container.add(group));
+            .fold(inner_container, |container, group| container.add(group));
+
+        let xaxis = self.xaxis.as_ref().unwrap();
+        let yaxis = self.yaxis.as_ref().unwrap();
+
+        let xgroup = xaxis.to_svg(&self.xticks, &yaxis);
+        let ygroup = yaxis.to_svg(&self.yticks, &xaxis);
+        container.append(inner_container);
+        container.append(xgroup);
+        container.append(ygroup);
 
         self.document = self
             .document
@@ -297,5 +317,79 @@ impl SpectrumSVG {
     pub fn save<P: AsRef<Path>>(&self, path: &P) -> io::Result<()> {
         svg::save(path, &self.document)?;
         Ok(())
+    }
+
+    #[cfg(feature = "png")]
+    pub fn write_png<W: Write>(&self, stream: &mut W) -> io::Result<()> {
+        use std::sync::Arc;
+
+        let mut buf = Vec::new();
+        self.write(&mut buf)?;
+        let mut fontdb = resvg::usvg::fontdb::Database::new();
+        fontdb.load_system_fonts();
+
+        fontdb.set_serif_family("Times New Roman");
+        fontdb.set_sans_serif_family("Arial");
+        fontdb.set_cursive_family("Comic Sans MS");
+        fontdb.set_fantasy_family("Impact");
+        fontdb.set_monospace_family("Courier New");
+
+        let svg_opts = resvg::usvg::Options {
+            fontdb: Arc::new(fontdb),
+            ..Default::default()
+        };
+
+        let tree = resvg::usvg::Tree::from_data(&buf, &svg_opts).unwrap();
+
+        let size = tree.size().to_int_size();
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width() as u32, size.height() as u32).unwrap();
+        pixmap.fill(resvg::tiny_skia::Color::WHITE);
+        resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+
+        stream.write_all(&pixmap.encode_png().unwrap())?;
+        Ok(())
+    }
+
+    #[cfg(feature = "png")]
+    pub fn save_png<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let mut outfh = io::BufWriter::new(fs::File::create(path)?);
+        self.write_png(&mut outfh)
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn write_pdf<W: Write>(&self, stream: &mut W) -> io::Result<()> {
+        use std::sync::Arc;
+
+        let mut buf = Vec::new();
+        self.write(&mut buf)?;
+
+        let conv_opts = svg2pdf::ConversionOptions::default();
+        let mut page_opts = svg2pdf::PageOptions::default();
+        page_opts.dpi = 180.0;
+
+        let mut fontdb = fontdb::Database::new();
+        fontdb.load_system_fonts();
+
+        fontdb.set_serif_family("Times New Roman");
+        fontdb.set_sans_serif_family("Arial");
+        fontdb.set_cursive_family("Comic Sans MS");
+        fontdb.set_fantasy_family("Impact");
+        fontdb.set_monospace_family("Courier New");
+
+        let svg_opts = svg2pdf::usvg::Options {
+            fontdb: Arc::new(fontdb),
+            ..Default::default()
+        };
+
+        let tree = svg2pdf::usvg::Tree::from_data(&buf, &svg_opts).unwrap();
+        let pdf = svg2pdf::to_pdf(&tree, conv_opts, page_opts);
+        stream.write_all(&pdf)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn save_pdf<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let mut outfh = io::BufWriter::new(fs::File::create(path)?);
+        self.write_pdf(&mut outfh)
     }
 }

@@ -8,5 +8,5 @@ mod transform;
 
 pub use chart::SpectrumSVG;
 pub use axes::{AxisLabelOptions, AxisTickLabelStyle};
-pub use series::{CentroidSeries, DeconvolutedCentroidSeries, ContinuousSeries, ColorCycle};
+pub use series::{CentroidSeries, DeconvolutedCentroidSeries, ContinuousSeries, ColorCycle, PlotSeries, AsSeries};
 pub use linear::{CoordinateRange, Scale};

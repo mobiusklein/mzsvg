@@ -57,45 +57,42 @@ impl<T: Float + Display> YAxis<T> {
         //     xaxis.transform(X::from(xaxis.start() * X::from(0.85).unwrap()).unwrap());
 
         let axis_label_coord = xaxis.transform(
-            xaxis.start() - X::from(xaxis.coordinates.size() * X::from(0.04).unwrap() ).unwrap(),
+            xaxis.start() - X::from(xaxis.coordinates.size() * X::from(0.05).unwrap()).unwrap(),
         );
 
         let tick_length = xaxis.transform(
-            xaxis.start() - X::from(xaxis.coordinates.size() * X::from(0.005).unwrap() ).unwrap(),
+            xaxis.start() - X::from(xaxis.coordinates.size() * X::from(0.005).unwrap()).unwrap(),
         );
 
         let ystart = self.transform(self.start());
         let state = Data::new().move_to((xcoord, ystart));
         let it = tick_positions.iter();
-        let (state, tick_labels) = it.fold(
-            (state, Vec::new()),
-            |(state, mut labels), next| {
-                let raw_next = next;
-                let next = self.transform(*next);
+        let (state, tick_labels) = it.fold((state, Vec::new()), |(state, mut labels), next| {
+            let raw_next = next;
+            let next = self.transform(*next);
 
-                let state = state
-                    .line_to((xcoord, next))
-                    .line_to((tick_length, next))
-                    .line_to((xcoord, next));
+            let state = state
+                .line_to((xcoord, next))
+                .line_to((tick_length, next))
+                .line_to((xcoord, next));
 
-                let label = ticks
-                    .tick_style
-                    .format(&raw_next.to_f64().unwrap(), &self.coordinates.to_f64());
+            let label = ticks
+                .tick_style
+                .format(&raw_next.to_f64().unwrap(), &self.coordinates.to_f64());
 
-                labels.push(
-                    Text::new()
-                        .add(svg::node::Text::new(label))
-                        .set("x", tick_length)
-                        .set("y", next)
-                        .set("font-size", ticks.tick_font_size)
-                        .set("text-anchor", "end")
-                        .set("dominant-baseline", "middle")
-                        .set("font-family", DEFAULT_FONT_FAMILY)
-                );
+            labels.push(
+                Text::new()
+                    .add(svg::node::Text::new(label))
+                    .set("x", tick_length)
+                    .set("y", next)
+                    .set("font-size", ticks.tick_font_size)
+                    .set("text-anchor", "end")
+                    .set("dominant-baseline", "middle")
+                    .set("font-family", DEFAULT_FONT_FAMILY),
+            );
 
-                (state, labels)
-            },
-        );
+            (state, labels)
+        });
 
         let state = state
             .line_to((xcoord, self.transform(self.coordinates.end)))
@@ -228,35 +225,32 @@ impl<T: Float> XAxis<T> {
         let xstart = self.transform(self.coordinates.start);
         let state = Data::new().move_to((xstart, ycoord));
         let it = tick_positions.iter();
-        let (state, tick_labels) = it.fold(
-            (state, Vec::new()),
-            |(state, mut labels), next| {
-                let raw_next = next;
-                let next = self.transform(*next);
+        let (state, tick_labels) = it.fold((state, Vec::new()), |(state, mut labels), next| {
+            let raw_next = next;
+            let next = self.transform(*next);
 
-                let state = state
-                    .line_to((next, ycoord))
-                    .line_to((next, tick_length))
-                    .line_to((next, ycoord));
+            let state = state
+                .line_to((next, ycoord))
+                .line_to((next, tick_length))
+                .line_to((next, ycoord));
 
-                let label = ticks
-                    .tick_style
-                    .format(&raw_next.to_f64().unwrap(), &self.coordinates.to_f64());
+            let label = ticks
+                .tick_style
+                .format(&raw_next.to_f64().unwrap(), &self.coordinates.to_f64());
 
-                labels.push(
-                    Text::new()
-                        .add(svg::node::Text::new(label))
-                        .set("x", next)
-                        .set("y", tick_length)
-                        .set("font-size", ticks.tick_font_size)
-                        .set("text-anchor", "middle")
-                        .set("dominant-baseline", "hanging")
-                        .set("font-family", DEFAULT_FONT_FAMILY)
-                );
+            labels.push(
+                Text::new()
+                    .add(svg::node::Text::new(label))
+                    .set("x", next)
+                    .set("y", tick_length)
+                    .set("font-size", ticks.tick_font_size)
+                    .set("text-anchor", "middle")
+                    .set("dominant-baseline", "hanging")
+                    .set("font-family", DEFAULT_FONT_FAMILY),
+            );
 
-                (state, labels)
-            },
-        );
+            (state, labels)
+        });
 
         let axis_label = Text::new()
             .add(svg::node::Text::new(&self.label))

@@ -46,14 +46,18 @@ impl Iterator for ColorCycle {
     }
 }
 
-// fn slice_x(self, start: X, end: X) -> Self;
-// fn slice_y(self, start: Y, end: Y) -> Self;
 pub trait PlotSeries<X: Float + Display, Y: Display + Float> {
     fn description(&self) -> &SeriesDescription;
     fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group;
 
     fn slice_x(&mut self, start: X, end: X);
     fn slice_y(&mut self, start: Y, end: Y);
+}
+
+pub trait AsSeries<X: Float + Display, Y: Display + Float> {
+    type Series: PlotSeries<X, Y>;
+
+    fn as_series(&self) -> Self::Series;
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -76,6 +80,12 @@ impl SeriesDescription {
 impl From<String> for SeriesDescription {
     fn from(value: String) -> Self {
         SeriesDescription::new(value, "black".to_string())
+    }
+}
+
+impl From<&str> for SeriesDescription {
+    fn from(value: &str) -> Self {
+        SeriesDescription::new(value.to_string(), "black".to_string())
     }
 }
 
@@ -163,6 +173,27 @@ impl<X: Float + Display, Y: Float + Display> ContinuousSeries<X, Y> {
             .set("d", path_data);
         let group = Group::new();
         group.add(path)
+    }
+}
+
+mod mzdata_continuum {
+    use mzdata::spectrum::BinaryArrayMap;
+
+    use super::*;
+
+    impl AsSeries<f64, f32> for BinaryArrayMap {
+        type Series = ContinuousSeries<f64, f32>;
+
+        fn as_series(&self) -> Self::Series {
+            let mzs = self.mzs().unwrap();
+            let intensities = self.intensities().unwrap();
+
+            ContinuousSeries::from_iterators(
+                mzs.iter().copied(),
+                intensities.iter().copied(),
+                "Profile".into(),
+            )
+        }
     }
 }
 

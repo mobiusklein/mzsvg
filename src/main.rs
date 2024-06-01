@@ -1,13 +1,16 @@
-use std::env;
 use std::error::Error;
 use std::fmt::Display;
 use std::io;
 use std::num::ParseFloatError;
 use std::ops::{Bound, Range, RangeBounds};
+use std::path::PathBuf;
 use std::str::FromStr;
 
-use mzdata;
+use clap::Parser;
 
+use mzdata;
+use mzdata::prelude::*;
+use mzdata::io::MZFileReader;
 #[allow(unused)]
 use mzdata::spectrum::{SignalContinuity, SpectrumLike};
 use mzsvg::SpectrumSVG;
@@ -16,6 +19,14 @@ use mzsvg::SpectrumSVG;
 pub struct MZRange {
     pub start: Option<f64>,
     pub end: Option<f64>,
+}
+
+impl Display for MZRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let start = self.start.map(|s| s.to_string()).unwrap_or_default();
+        let end = self.end.map(|s| s.to_string()).unwrap_or_default();
+        write!(f, "{start}-{end}")
+    }
 }
 
 impl MZRange {
@@ -122,52 +133,76 @@ impl From<(f64, f64)> for MZRange {
     }
 }
 
+#[derive(Parser, Default, Debug)]
+struct App {
+    #[arg(help="Path to MS data file to draw")]
+    path: PathBuf,
+
+    #[arg(short='s', long="scan-number")]
+    scan_number: usize,
+
+    #[arg(short='m', long="mz-range", value_parser=MZRange::from_str, value_name="BEGIN-END", default_value_t=MZRange::default())]
+    mz_range: MZRange,
+
+    #[arg(short='a', long="aspect-ratio")]
+    aspect_ratio: Option<f64>,
+
+    #[arg(short='r', long="reprofile", default_value_t=false)]
+    reprofile: bool,
+
+    #[arg(long="pdf", default_value_t=false)]
+    pdf: bool,
+
+    #[arg(long="png", default_value_t=false)]
+    png: bool,
+}
+
 fn main() -> io::Result<()> {
-    let mut args = env::args().skip(1);
+    let args = App::parse();
 
-    let path = args.next().expect("Please pass an MS data file path");
-    let scan_index: usize = args
-        .next()
-        .expect("Please pass a scan number")
-        .parse::<usize>()
-        .unwrap_or_else(|e| {
-            panic!("Failed to parse scan number: {e}");
-        });
-
-    let mz_range = args
-        .next()
-        .map_or_else(MZRange::default, |x| x.parse().unwrap());
+    let path = args.path;
+    let scan_index = args.scan_number;
 
     let mut document = SpectrumSVG::default();
 
-    if let Some(mz_scale_arg) = args.next() {
-        if let Ok(mz_scale) = mz_scale_arg.parse() {
-            document.mz_scale = mz_scale;
-        }
+    if let Some(aspect_ratio) = args.aspect_ratio {
+        document.set_aspect_ratio(aspect_ratio);
     }
 
-    if let Some(intensity_scale_arg) = args.next() {
-        if let Ok(intensity_scale) = intensity_scale_arg.parse() {
-            document.intensity_scale = intensity_scale;
-        }
-    }
-
-    let mut reader = mzdata::io::open_file(path)?;
+    let mut reader = mzdata::MZReader::open_path(path)?;
     if let Some(mut spectrum) = reader.get_spectrum_by_index(scan_index) {
         let _has_deconv = spectrum.try_build_deconvoluted_centroids().is_ok();
-        let _has_centroid = spectrum.try_build_centroids().is_ok();
+        let has_centroid = spectrum.try_build_centroids().is_ok();
         eprintln!("{} @ MS{}", spectrum.id(), spectrum.ms_level());
-        document.axes_from(&spectrum).xlim(mz_range);
+        document.axes_from(&spectrum).xlim(args.mz_range);
         document.draw_spectrum(&spectrum);
 
-        // if _has_centroid && spectrum.signal_continuity() == SignalContinuity::Centroid {
-        //     if let Ok(()) = spectrum.reprofile_with_shape(0.005, 0.025) {
-        //         eprintln!("Drawing reprofiled spectrum");
-        //         document.draw_profile(spectrum.arrays.as_ref().unwrap());
-        //     }
-        // }
+        if has_centroid && spectrum.signal_continuity() == SignalContinuity::Centroid && args.reprofile {
+            if let Ok(()) = spectrum.reprofile_with_shape(0.0025, 0.025) {
+                eprintln!("Drawing reprofiled spectrum");
+                document.draw_profile(spectrum.arrays.as_ref().unwrap());
+            }
+        }
         document.finish();
         document.save(&"image.svg")?;
+
+        #[cfg(feature = "pdf")]
+        if args.pdf {
+            document.save_pdf(&"image.pdf")?;
+        }
+        #[cfg(not(feature = "pdf"))]
+        if args.pdf {
+            eprintln!("Cannot generate PDF file from SVG. Enable the `pdf` feature.")
+        }
+
+        #[cfg(feature = "png")]
+        if args.png {
+            document.save_png(&"image.png")?;
+        }
+        #[cfg(not(feature = "png"))]
+        if args.png {
+            eprintln!("Cannot generate PNG file from SVG. Enable the `png` feature.")
+        }
     } else {
         panic!("Failed to find spectrum {scan_index}");
     }
