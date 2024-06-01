@@ -17,7 +17,7 @@ pdf = ["svg2pdf", "fontdb"]
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
-mzdata = { path = "../mzdata", features = ["mzsignal", "nalgebra"]}
+mzdata = { version = ">= 0.20.0", features = ["mzsignal", "nalgebra"]}
 mzpeaks = ">=0.12.0"
 nalgebra = "0.32.3"
 num-traits = "0.2.17"
