@@ -9,12 +9,9 @@ use mzpeaks::{
 };
 use num_traits::Float;
 
-use svg::{
-    node::element::{path::Data as PathData, Group, Line, Path, Polyline, Text},
-    Node,
-};
+use svg::node::element::{path::Data as PathData, Group, Path, Polyline};
 
-use super::chart_regions::Canvas;
+use super::chart_regions::{Canvas, TextProps};
 
 const DEFAULT_COLOR_CYCLE: &'static [&'static str] = &[
     "steelblue",
@@ -55,10 +52,9 @@ impl Iterator for ColorCycle {
     }
 }
 
-
 pub trait PlotSeries<X: Float + Display + LowerExp, Y: Display + Float + LowerExp> {
     fn description(&self) -> &SeriesDescription;
-    fn to_svg(&self, xaxis: &Canvas<X, Y>) -> Group;
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group;
 
     fn slice_x(&mut self, start: X, end: X);
     fn slice_y(&mut self, start: Y, end: Y);
@@ -106,21 +102,28 @@ pub struct LineSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerE
 }
 
 impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> LineSeries<X, Y> {
-    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
-        let min_mz = self
-            .points
-            .iter()
-            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-            .unwrap()
-            .0;
-        let max_intens = Y::from(100.0).unwrap();
-        let mut line = Polyline::new();
 
+    pub fn new(points: Vec<(X, Y)>, description: SeriesDescription) -> Self {
+        Self { points, description }
+    }
+
+    pub fn from_iterators(
+        xiter: impl Iterator<Item = X>,
+        yiter: impl Iterator<Item = Y>,
+        description: SeriesDescription,
+    ) -> Self {
+        Self {
+            points: xiter.zip(yiter).collect(),
+            description,
+        }
+    }
+
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         let path_data: Vec<_> = self
             .points
             .iter()
             .enumerate()
-            .map(|(i, (mz, inten))| {
+            .map(|(_, (mz, inten))| {
                 format!(
                     "{},{}",
                     canvas.x_axis.scale.transform(*mz).to_f64().unwrap(),
@@ -204,7 +207,6 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> ContinuousSer
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
             .unwrap()
             .0;
-        let max_intens = Y::from(100.0).unwrap();
         let path_data = self
             .points
             .iter()
@@ -216,10 +218,9 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> ContinuousSer
                         canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
                     ));
                 }
-                state.line_to((
-                    canvas.x_axis.scale.transform(*mz).to_f64().unwrap(),
-                    canvas.y_axis.scale.transform(*inten).to_f64().unwrap(),
-                ))
+                state.line_to(
+                    canvas.transform(*mz, *inten)
+                )
             })
             .close();
         let path = Path::new()
@@ -261,6 +262,81 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X,
             .filter(|(_, y)| (y >= &start) && (y <= &end))
             .collect();
         self.points = points;
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct AnnotationSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
+    pub points: Vec<(X, Y, String)>,
+    pub description: SeriesDescription,
+    pub text_props: TextProps,
+}
+
+impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X, Y> for AnnotationSeries<X, Y> {
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.to_svg(canvas)
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        let points = self
+            .points
+            .iter()
+            .filter(|(x, _, _)| (x >= &start) && (x <= &end))
+            .cloned()
+            .collect();
+        self.points = points;
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        let points = self
+            .points
+            .iter()
+            .filter(|(_, y, _)| (y >= &start) && (y <= &end))
+            .cloned()
+            .collect();
+        self.points = points;
+    }
+}
+
+impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> AnnotationSeries<X, Y> {
+
+    pub fn new(
+        points: Vec<(X, Y, String)>,
+        description: SeriesDescription,
+        text_props: TextProps,
+    ) -> Self {
+        Self {
+            points,
+            description,
+            text_props,
+        }
+    }
+
+    pub fn from_iterators(
+        xiter: impl Iterator<Item = X>,
+        yiter: impl Iterator<Item = Y>,
+        text_iter: impl Iterator<Item = String>,
+        description: SeriesDescription,
+    ) -> Self {
+        Self {
+            points: xiter.zip(yiter).zip(text_iter).map(|((x, y), text)| (x, y, text)).collect(),
+            description,
+            text_props: TextProps::default()
+        }
+    }
+
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        let mut group = Group::new();
+        for (x, y, text) in self.points.iter() {
+            let (x2, y2) = canvas.transform(*x, *y);
+            eprintln!("{x} -> {x2}, {y} -> {y2}");
+            group = group.add(Group::new().set("transform", format!("translate({}, {})", x2, y2)).add(self.text_props.text(text.clone())))
+        }
+        group
     }
 }
 
@@ -499,8 +575,6 @@ mod test {
 
         canvas.groups.push(series.to_svg(&canvas));
 
-        let doc = canvas.to_svg(&props, &props2);
-
-        std::fs::write("test.svg", doc.to_string()).unwrap();
+        let _ = canvas.to_svg(&props, &props2);
     }
 }

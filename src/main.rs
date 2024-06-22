@@ -133,6 +133,30 @@ impl From<(f64, f64)> for MZRange {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Dimensions(usize, usize);
+
+impl Default for Dimensions {
+    fn default() -> Self {
+        Self(600, 200)
+    }
+}
+
+impl Display for Dimensions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}", self.0, self.1)
+    }
+}
+
+fn parse_dimensions(dims: &str) -> Result<Dimensions, std::num::ParseIntError> {
+    let r: Result<Vec<usize>, std::num::ParseIntError> = dims.split("x").map(|s| s.parse::<usize>()).collect();
+    let r = r?;
+
+    let width = r[0];
+    let height = r[1];
+    Ok(Dimensions(width, height))
+}
+
 #[derive(Parser, Default, Debug)]
 struct App {
     #[arg(help = "Path to MS data file to draw")]
@@ -144,8 +168,8 @@ struct App {
     #[arg(short='m', long="mz-range", value_parser=MZRange::from_str, value_name="BEGIN-END", default_value_t=MZRange::default())]
     mz_range: MZRange,
 
-    #[arg(short='d', long="dimensions", num_args=1..=3, default_value="1400 600")]
-    dimensions: Vec<usize>,
+    #[arg(short='d', long="dimensions", default_value_t=Dimensions(600, 200), value_parser=parse_dimensions)]
+    dimensions: Dimensions,
 
     #[arg(short = 'a', long = "aspect-ratio")]
     aspect_ratio: Option<f64>,
@@ -166,7 +190,7 @@ fn main() -> io::Result<()> {
     let path = args.path;
     let scan_index = args.scan_number;
 
-    let mut document = SpectrumSVG::with_size(args.dimensions[0], args.dimensions[1]);
+    let mut document = SpectrumSVG::with_size(args.dimensions.0, args.dimensions.1);
 
     let mut reader = mzdata::MZReader::open_path(path)?;
     if let Some(mut spectrum) = reader.get_spectrum_by_index(scan_index) {

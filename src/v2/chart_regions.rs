@@ -4,18 +4,10 @@ use num_traits::Float;
 
 use svg::{
     node::element::{path::Data as PathData, Group, Line, Path, Text},
-    Node,
+    Document,
 };
 
 use crate::linear::{CoordinateRange, Scale};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Region {
-    Canvas,
-    XAxis,
-    YAxis,
-    Title,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisOrientation {
@@ -76,12 +68,15 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> Canvas<X, Y> 
         self.y_axis.scale.domain = y_range;
     }
 
-    pub fn to_svg(
-        &self,
-        x_axis_props: &AxisProps<X>,
-        y_axis_props: &AxisProps<Y>,
-    ) -> svg::Document {
-        let doc = svg::Document::new();
+    pub fn transform(&self, x: X, y: Y) -> (f64, f64) {
+        (
+            self.x_axis.scale.transform(x).to_f64().unwrap(),
+            self.y_axis.scale.transform(y).to_f64().unwrap(),
+        )
+    }
+
+    pub fn to_svg(&self, x_axis_props: &AxisProps<X>, y_axis_props: &AxisProps<Y>) -> Document {
+        let doc = Document::new();
 
         let data = self.groups.iter().fold(
             Group::new().set("class", "data-canvas"),
@@ -97,6 +92,7 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> Canvas<X, Y> 
                     x_axis_props.tick_spacing() * 4.0
                 ),
             )
+            .set("class", "canvas")
             .add(data)
             .add(x_axis_props.to_svg(&self.x_axis.scale, &self))
             .add(y_axis_props.to_svg(&self.y_axis.scale, &self));
@@ -167,7 +163,6 @@ impl AxisTickLabelStyle {
         }
     }
 }
-
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AxisLabelOptions {
@@ -300,10 +295,10 @@ impl<T: Float + Display + LowerExp> AxisProps<T> {
         container = values
             .iter()
             .enumerate()
-            .map(|(i, v)| {
+            .map(|(_, v)| {
                 let range_v = scale.transform(*v).to_f64().unwrap();
                 // eprintln!("Tick {i} {0} -> {range_v}", v.to_f64().unwrap());
-                let mut tick_container = Group::new().set("class", "tick").set(
+                let tick_container = Group::new().set("class", "tick").set(
                     "transform",
                     if self.axis_orientation.is_horizontal() {
                         translate_x(range_v)
@@ -377,6 +372,53 @@ impl<T: Float + Display + LowerExp> AxisProps<T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum HorizontalAlignment {
+    Start,
+    #[default]
+    Middle,
+    End,
+}
+
+impl HorizontalAlignment {
+    pub fn render(&self) -> &'static str {
+        match self {
+            HorizontalAlignment::Start => "start",
+            HorizontalAlignment::Middle => "middle",
+            HorizontalAlignment::End => "end",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextProps {
+    pub text_size: f64,
+    pub horizontal_alignment: HorizontalAlignment,
+    pub font_family: String,
+    pub color: String
+}
+
+impl TextProps {
+    pub fn text(&self, text: String) -> Text {
+        Text::new(text)
+            .set("font-family", self.font_family.clone())
+            .set("text-anchor", self.horizontal_alignment.render())
+            .set("font-size", format!("{}em", self.text_size))
+            .set("fill", self.color.clone())
+    }
+}
+
+impl Default for TextProps {
+    fn default() -> Self {
+        TextProps {
+            text_size: 1.0,
+            horizontal_alignment: HorizontalAlignment::Middle,
+            font_family: "serif".to_string(),
+            color: "black".to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -412,9 +454,6 @@ mod test {
         props2.tick_values = Some(vec![10000.0, 7500.05, 5000.0, 2500.0, 0.0]);
         props2.label = Some("Intensity".to_string());
 
-        let doc = canvas.to_svg(&props, &props2);
-        eprintln!("{}", doc.to_string());
-
-        std::fs::write("test.svg", doc.to_string()).unwrap();
+        canvas.to_svg(&props, &props2);
     }
 }

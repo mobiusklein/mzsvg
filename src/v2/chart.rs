@@ -1,11 +1,9 @@
 use std::io::prelude::*;
-use std::mem;
 use std::ops::Bound;
 use std::path::Path;
 use std::{fs, io, ops::RangeBounds};
 
 use svg::node::element::Group;
-use svg::{Document, Node};
 
 use num_traits::Float;
 
@@ -17,13 +15,13 @@ use mzdata::{
 
 use mzpeaks::{CentroidLike, DeconvolutedCentroidLike, MZLocated, MZPeakSetType, MassPeakSetType};
 
-use super::chart_regions::{AxisOrientation, AxisProps, AxisTickLabelStyle, Canvas, AxisLabelOptions};
+use super::chart_regions::{AxisOrientation, AxisProps, AxisTickLabelStyle, Canvas};
 use super::series::{
-    CentroidSeries, ContinuousSeries, DeconvolutedCentroidSeries, PlotSeries, SeriesDescription,
-    ColorCycle
+    CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, PlotSeries,
+    SeriesDescription,
 };
 
-use crate::CoordinateRange;
+use crate::{AnnotationSeries, CoordinateRange, LineSeries, TextProps};
 
 #[derive(Debug, Clone)]
 pub struct SpectrumSVG {
@@ -42,7 +40,9 @@ impl Default for SpectrumSVG {
         Self {
             canvas: Canvas::new(1400, 600),
             colors: Default::default(),
-            xticks: AxisProps::new(AxisOrientation::Bottom).label("m/z").id("x-axis"),
+            xticks: AxisProps::new(AxisOrientation::Bottom)
+                .label("m/z")
+                .id("x-axis"),
             yticks: AxisProps::new(AxisOrientation::Left)
                 .label("Intensity")
                 .tick_format(AxisTickLabelStyle::Percentile(2))
@@ -61,10 +61,12 @@ impl SpectrumSVG {
     }
 
     pub fn new(canvas: Canvas<f64, f32>) -> Self {
-        let mut inst = Self {
+        let inst = Self {
             canvas,
             colors: Default::default(),
-            xticks: AxisProps::new(AxisOrientation::Bottom).label("m/z").id("x-axis"),
+            xticks: AxisProps::new(AxisOrientation::Bottom)
+                .label("m/z")
+                .id("x-axis"),
             yticks: AxisProps::new(AxisOrientation::Left)
                 .label("Intensity")
                 .tick_format(AxisTickLabelStyle::Percentile(2))
@@ -146,9 +148,6 @@ impl SpectrumSVG {
             self.x_range.as_ref().unwrap().end,
         );
 
-        let xaxis = self.x_range.as_ref().unwrap();
-        let yaxis = self.y_range.as_ref().unwrap();
-
         let sgroup = series.to_svg(&self.canvas);
         self.canvas.groups.push(sgroup);
     }
@@ -224,6 +223,30 @@ impl SpectrumSVG {
         if let Some(peaks) = spectrum.deconvoluted_peaks.as_ref() {
             self.draw_deconvoluted_centroids(peaks);
         }
+
+        if let Some(precursor) = spectrum.precursor() {
+            let x = precursor.ion().mz();
+            let y = precursor
+                .ion()
+                .intensity
+                .min(self.y_range.clone().unwrap().max())
+                * 0.95;
+            let z = precursor.ion().charge().unwrap_or(0);
+            let s = format!("{x:0.2}, {z}");
+            let pts = vec![(x, y, s)];
+            let mut text_props = TextProps::default();
+            text_props.text_size = 0.8;
+            text_props.color = "skyblue".into();
+
+            let annot = AnnotationSeries::new(pts, "Precursor".into(), text_props);
+            let mut group = annot.to_svg(&self.canvas);
+            group = group.set("stroke", "black").set("stroke-width", "0.1pt");
+            self.canvas.groups.push(group);
+
+            group = LineSeries::new(vec![(x, 0.0), (x, y)], "Precursor-Line".into()).to_svg(&self.canvas);
+            group = group.set("stroke-dasharray", 4).set("stroke", "black").set("stroke-width", "0.5pt");
+            self.canvas.groups.push(group)
+        }
     }
 
     pub fn finish(&mut self) {
@@ -267,22 +290,18 @@ impl SpectrumSVG {
 
         let resolution_scale = 3.0;
 
-        let size = tree.size().to_int_size().scale_by(resolution_scale).unwrap();
+        let size = tree
+            .size()
+            .to_int_size()
+            .scale_by(resolution_scale)
+            .unwrap();
         let mut pixmap =
             resvg::tiny_skia::Pixmap::new(size.width() as u32, size.height() as u32).unwrap();
         pixmap.fill(resvg::tiny_skia::Color::WHITE);
 
-        let ts = {
-            let size1 = tree.size();
-            let size2 = size1.to_int_size().scale_by(resolution_scale).unwrap().to_size();
-            resvg::tiny_skia::Transform::from_scale(size2.width() / size1.width(), size2.height() / size1.height())
-        };
+        let ts = resvg::tiny_skia::Transform::from_scale(resolution_scale, resolution_scale);
 
-        resvg::render(
-            &tree,
-           ts,
-            &mut pixmap.as_mut(),
-        );
+        resvg::render(&tree, ts, &mut pixmap.as_mut());
 
         stream.write_all(&pixmap.encode_png().unwrap())?;
         Ok(())
