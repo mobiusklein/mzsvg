@@ -9,8 +9,8 @@ use std::str::FromStr;
 use clap::Parser;
 
 use mzdata;
-use mzdata::prelude::*;
 use mzdata::io::MZFileReader;
+use mzdata::prelude::*;
 #[allow(unused)]
 use mzdata::spectrum::{SignalContinuity, SpectrumLike};
 use mzsvg::SpectrumSVG;
@@ -135,25 +135,28 @@ impl From<(f64, f64)> for MZRange {
 
 #[derive(Parser, Default, Debug)]
 struct App {
-    #[arg(help="Path to MS data file to draw")]
+    #[arg(help = "Path to MS data file to draw")]
     path: PathBuf,
 
-    #[arg(short='s', long="scan-number")]
+    #[arg(short = 's', long = "scan-number")]
     scan_number: usize,
 
     #[arg(short='m', long="mz-range", value_parser=MZRange::from_str, value_name="BEGIN-END", default_value_t=MZRange::default())]
     mz_range: MZRange,
 
-    #[arg(short='a', long="aspect-ratio")]
+    #[arg(short='d', long="dimensions", num_args=1..=3, default_value="1400 600")]
+    dimensions: Vec<usize>,
+
+    #[arg(short = 'a', long = "aspect-ratio")]
     aspect_ratio: Option<f64>,
 
-    #[arg(short='r', long="reprofile", default_value_t=false)]
+    #[arg(short = 'r', long = "reprofile", default_value_t = false)]
     reprofile: bool,
 
-    #[arg(long="pdf", default_value_t=false)]
+    #[arg(long = "pdf", default_value_t = false)]
     pdf: bool,
 
-    #[arg(long="png", default_value_t=false)]
+    #[arg(long = "png", default_value_t = false)]
     png: bool,
 }
 
@@ -163,11 +166,7 @@ fn main() -> io::Result<()> {
     let path = args.path;
     let scan_index = args.scan_number;
 
-    let mut document = SpectrumSVG::default();
-
-    if let Some(aspect_ratio) = args.aspect_ratio {
-        document.set_aspect_ratio(aspect_ratio);
-    }
+    let mut document = SpectrumSVG::with_size(args.dimensions[0], args.dimensions[1]);
 
     let mut reader = mzdata::MZReader::open_path(path)?;
     if let Some(mut spectrum) = reader.get_spectrum_by_index(scan_index) {
@@ -177,9 +176,11 @@ fn main() -> io::Result<()> {
         document.axes_from(&spectrum).xlim(args.mz_range);
         document.draw_spectrum(&spectrum);
 
-        if has_centroid && spectrum.signal_continuity() == SignalContinuity::Centroid && args.reprofile {
+        if has_centroid
+            && spectrum.signal_continuity() == SignalContinuity::Centroid
+            && args.reprofile
+        {
             if let Ok(()) = spectrum.reprofile_with_shape(0.0025, 0.025) {
-                eprintln!("Drawing reprofiled spectrum");
                 document.draw_profile(spectrum.arrays.as_ref().unwrap());
             }
         }

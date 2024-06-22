@@ -1,12 +1,7 @@
 
-mod axes;
 mod linear;
-mod series;
-mod chart;
 
-mod transform;
+pub mod v2;
 
-pub use chart::SpectrumSVG;
-pub use axes::{AxisLabelOptions, AxisTickLabelStyle};
-pub use series::{CentroidSeries, DeconvolutedCentroidSeries, ContinuousSeries, ColorCycle, PlotSeries, AsSeries};
+pub use v2::SpectrumSVG;
 pub use linear::{CoordinateRange, Scale};

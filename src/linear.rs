@@ -75,10 +75,10 @@ impl<T: Float> From<core::ops::RangeTo<T>> for CoordinateRange<T> {
     }
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone)]
 pub struct Scale<T: Float> {
-    domain: CoordinateRange<T>,
-    range: CoordinateRange<T>,
+    pub domain: CoordinateRange<T>,
+    pub range: CoordinateRange<T>,
 }
 
 #[allow(unused)]

@@ -1,11 +1,20 @@
-use std::{fmt::Display, marker::PhantomData};
+use std::{
+    fmt::{Display, LowerExp},
+    marker::PhantomData,
+};
 
+use mzpeaks::{
+    CentroidLike, DeconvolutedCentroidLike, IntensityMeasurement, MZLocated, MZPeakSetType,
+    MassPeakSetType,
+};
 use num_traits::Float;
-use svg::node::element::{path::Data, Group, Path};
 
-use mzpeaks::{prelude::*, CentroidLike, MZPeakSetType, MassPeakSetType};
+use svg::{
+    node::element::{path::Data as PathData, Group, Line, Path, Polyline, Text},
+    Node,
+};
 
-use crate::axes::{XAxis, YAxis};
+use super::chart_regions::Canvas;
 
 const DEFAULT_COLOR_CYCLE: &'static [&'static str] = &[
     "steelblue",
@@ -46,15 +55,16 @@ impl Iterator for ColorCycle {
     }
 }
 
-pub trait PlotSeries<X: Float + Display, Y: Display + Float> {
+
+pub trait PlotSeries<X: Float + Display + LowerExp, Y: Display + Float + LowerExp> {
     fn description(&self) -> &SeriesDescription;
-    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group;
+    fn to_svg(&self, xaxis: &Canvas<X, Y>) -> Group;
 
     fn slice_x(&mut self, start: X, end: X);
     fn slice_y(&mut self, start: Y, end: Y);
 }
 
-pub trait AsSeries<X: Float + Display, Y: Display + Float> {
+pub trait AsSeries<X: Float + Display + LowerExp, Y: Display + Float + LowerExp> {
     type Series: PlotSeries<X, Y>;
 
     fn as_series(&self) -> Self::Series;
@@ -90,18 +100,55 @@ impl From<&str> for SeriesDescription {
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct ContinuousSeries<X: Float + Display, Y: Float + Display> {
+pub struct LineSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
     pub points: Vec<(X, Y)>,
     pub description: SeriesDescription,
 }
 
-impl<X: Float + Display, Y: Float + Display> PlotSeries<X, Y> for ContinuousSeries<X, Y> {
+impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> LineSeries<X, Y> {
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        let min_mz = self
+            .points
+            .iter()
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .unwrap()
+            .0;
+        let max_intens = Y::from(100.0).unwrap();
+        let mut line = Polyline::new();
+
+        let path_data: Vec<_> = self
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, (mz, inten))| {
+                format!(
+                    "{},{}",
+                    canvas.x_axis.scale.transform(*mz).to_f64().unwrap(),
+                    canvas.y_axis.scale.transform(*inten).to_f64().unwrap(),
+                )
+            })
+            .collect();
+        let points = path_data.join(" ");
+
+        let path = Polyline::new()
+            .set("points", points)
+            .set("fill", "none")
+            .set("stroke", self.description.color.clone())
+            .set("stroke-width", 1);
+        let group = Group::new();
+        group.add(path)
+    }
+}
+
+impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X, Y>
+    for LineSeries<X, Y>
+{
     fn description(&self) -> &SeriesDescription {
         &self.description
     }
 
-    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
-        self.to_svg(xaxis, yaxis)
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.to_svg(canvas)
     }
 
     fn slice_x(&mut self, start: X, end: X) {
@@ -125,7 +172,13 @@ impl<X: Float + Display, Y: Float + Display> PlotSeries<X, Y> for ContinuousSeri
     }
 }
 
-impl<X: Float + Display, Y: Float + Display> ContinuousSeries<X, Y> {
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ContinuousSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
+    pub points: Vec<(X, Y)>,
+    pub description: SeriesDescription,
+}
+
+impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> ContinuousSeries<X, Y> {
     pub fn new(points: Vec<(X, Y)>, description: SeriesDescription) -> Self {
         Self {
             points,
@@ -144,7 +197,7 @@ impl<X: Float + Display, Y: Float + Display> ContinuousSeries<X, Y> {
         }
     }
 
-    pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         let min_mz = self
             .points
             .iter()
@@ -156,23 +209,58 @@ impl<X: Float + Display, Y: Float + Display> ContinuousSeries<X, Y> {
             .points
             .iter()
             .enumerate()
-            .fold(Data::new(), |mut state, (i, (mz, inten))| {
+            .fold(PathData::new(), |mut state, (i, (mz, inten))| {
                 if i == 0 {
-                    state = state.move_to((xaxis.transform(min_mz), yaxis.transform(Y::zero())));
+                    state = state.move_to((
+                        canvas.x_axis.scale.transform(min_mz).to_f64().unwrap(),
+                        canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
+                    ));
                 }
                 state.line_to((
-                    xaxis.transform(*mz),
-                    yaxis.transform((*inten / max_intens) * Y::from(100.0).unwrap()),
+                    canvas.x_axis.scale.transform(*mz).to_f64().unwrap(),
+                    canvas.y_axis.scale.transform(*inten).to_f64().unwrap(),
                 ))
             })
             .close();
         let path = Path::new()
             .set("fill", "none")
             .set("stroke", self.description.color.clone())
-            .set("stroke-width", 5)
+            .set("stroke-width", 1)
             .set("d", path_data);
         let group = Group::new();
-        group.add(path)
+        group.add(path).set("class", self.description.label.clone())
+    }
+}
+
+impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X, Y>
+    for ContinuousSeries<X, Y>
+{
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.to_svg(canvas)
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        let points = self
+            .points
+            .iter()
+            .copied()
+            .filter(|(x, _)| (x >= &start) && (x <= &end))
+            .collect();
+        self.points = points;
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        let points = self
+            .points
+            .iter()
+            .copied()
+            .filter(|(_, y)| (y >= &start) && (y <= &end))
+            .collect();
+        self.points = points;
     }
 }
 
@@ -222,23 +310,29 @@ pub fn peaks_to_arrays<
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct CentroidSeries<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static>
-{
+pub struct CentroidSeries<
+    X: Float + Display + LowerExp,
+    Y: Float + Display + LowerExp,
+    T: CentroidLike + Clone + 'static,
+> {
     pub peaks: MZPeakSetType<T>,
     pub description: SeriesDescription,
     _x: PhantomData<X>,
     _y: PhantomData<Y>,
 }
 
-impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static> PlotSeries<X, Y>
-    for CentroidSeries<X, Y, T>
+impl<
+        X: Float + Display + LowerExp,
+        Y: Float + Display + LowerExp,
+        T: CentroidLike + Clone + 'static,
+    > PlotSeries<X, Y> for CentroidSeries<X, Y, T>
 {
     fn description(&self) -> &SeriesDescription {
         &self.description
     }
 
-    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
-        self.to_svg(xaxis, yaxis)
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.to_svg(canvas)
     }
 
     fn slice_x(&mut self, start: X, end: X) {
@@ -265,8 +359,11 @@ impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static> 
     }
 }
 
-impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static>
-    CentroidSeries<X, Y, T>
+impl<
+        X: Float + Display + LowerExp,
+        Y: Float + Display + LowerExp,
+        T: CentroidLike + Clone + 'static,
+    > CentroidSeries<X, Y, T>
 {
     pub fn new(peaks: MZPeakSetType<T>, description: SeriesDescription) -> Self {
         Self {
@@ -282,18 +379,18 @@ impl<X: Float + Display, Y: Float + Display, T: CentroidLike + Clone + 'static>
         Self::new(peaks, description)
     }
 
-    pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         let points = peaks_to_arrays(self.peaks.iter());
         let proxy = ContinuousSeries::new(points, self.description.clone());
-        let group = proxy.to_svg(xaxis, yaxis);
+        let group = proxy.to_svg(canvas);
         group
     }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeconvolutedCentroidSeries<
-    X: Float + Display,
-    Y: Float + Display,
+    X: Float + Display + LowerExp,
+    Y: Float + Display + LowerExp,
     T: DeconvolutedCentroidLike + Clone + MZLocated + 'static,
 > {
     pub peaks: MassPeakSetType<T>,
@@ -303,8 +400,8 @@ pub struct DeconvolutedCentroidSeries<
 }
 
 impl<
-        X: Float + Display,
-        Y: Float + Display,
+        X: Float + Display + LowerExp,
+        Y: Float + Display + LowerExp,
         T: DeconvolutedCentroidLike + Clone + MZLocated + 'static,
     > PlotSeries<X, Y> for DeconvolutedCentroidSeries<X, Y, T>
 {
@@ -312,8 +409,8 @@ impl<
         &self.description
     }
 
-    fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
-        self.to_svg(xaxis, yaxis)
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.to_svg(canvas)
     }
 
     fn slice_x(&mut self, start: X, end: X) {
@@ -341,8 +438,8 @@ impl<
 }
 
 impl<
-        X: Float + Display,
-        Y: Float + Display,
+        X: Float + Display + LowerExp,
+        Y: Float + Display + LowerExp,
         T: DeconvolutedCentroidLike + Clone + 'static + MZLocated,
     > DeconvolutedCentroidSeries<X, Y, T>
 {
@@ -360,12 +457,50 @@ impl<
         Self::new(peaks, description)
     }
 
-    pub fn to_svg(&self, xaxis: &XAxis<X>, yaxis: &YAxis<Y>) -> Group {
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         let mut peaks_sorted: Vec<_> = self.peaks.iter().cloned().collect();
         peaks_sorted.sort_by(|a, b| a.mz().total_cmp(&b.mz()));
         let points = peaks_to_arrays(peaks_sorted.iter());
         let proxy = ContinuousSeries::new(points, self.description.clone());
-        let group = proxy.to_svg(xaxis, yaxis);
+        let group = proxy.to_svg(canvas);
         group
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        v2::chart_regions::{AxisOrientation, AxisProps},
+        CoordinateRange,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_polyline() {
+        let mut canvas: Canvas<f64, f32> = Canvas::new(600, 200);
+        canvas.update_scales(
+            CoordinateRange::new(0.0, 1000.0),
+            CoordinateRange::new(10000.0, 0.0),
+        );
+
+        let mut props: AxisProps<f64> = AxisProps::new(AxisOrientation::Bottom);
+        props.tick_values = Some(vec![0.0, 200.0, 400.0, 600.0, 800.0, 1000.0]);
+        props.label = Some("m/z".to_string());
+
+        let mut props2: AxisProps<f32> = AxisProps::new(AxisOrientation::Left);
+        props2.tick_values = Some(vec![10000.0, 7500.05, 5000.0, 2500.0, 0.0]);
+        props2.label = Some("Intensity".to_string());
+
+        let series = LineSeries {
+            points: vec![(250.0, 7000.5), (350.0, 150.0), (571.0, 4000.0)],
+            description: "test".into(),
+        };
+
+        canvas.groups.push(series.to_svg(&canvas));
+
+        let doc = canvas.to_svg(&props, &props2);
+
+        std::fs::write("test.svg", doc.to_string()).unwrap();
     }
 }

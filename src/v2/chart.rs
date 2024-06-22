@@ -1,8 +1,8 @@
-use std::ops::Bound;
-use std::{io, ops::RangeBounds, fs};
 use std::io::prelude::*;
-use std::path::Path;
 use std::mem;
+use std::ops::Bound;
+use std::path::Path;
+use std::{fs, io, ops::RangeBounds};
 
 use svg::node::element::Group;
 use svg::{Document, Node};
@@ -17,95 +17,64 @@ use mzdata::{
 
 use mzpeaks::{CentroidLike, DeconvolutedCentroidLike, MZLocated, MZPeakSetType, MassPeakSetType};
 
-use crate::axes::{AxisLabelOptions, AxisTickLabelStyle, XAxis, YAxis};
-use crate::series::{
-    CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, SeriesDescription, PlotSeries
+use super::chart_regions::{AxisOrientation, AxisProps, AxisTickLabelStyle, Canvas, AxisLabelOptions};
+use super::series::{
+    CentroidSeries, ContinuousSeries, DeconvolutedCentroidSeries, PlotSeries, SeriesDescription,
+    ColorCycle
 };
+
+use crate::CoordinateRange;
 
 #[derive(Debug, Clone)]
 pub struct SpectrumSVG {
-    pub document: Document,
-    pub intensity_scale: f64,
-    pub mz_scale: f64,
+    pub canvas: Canvas<f64, f32>,
     pub colors: ColorCycle,
-    pub xticks: AxisLabelOptions,
-    pub yticks: AxisLabelOptions,
+    pub xticks: AxisProps<f64>,
+    pub yticks: AxisProps<f32>,
+    pub x_range: Option<CoordinateRange<f64>>,
+    pub y_range: Option<CoordinateRange<f32>>,
     pub finished: bool,
-    xaxis: Option<XAxis<f64>>,
-    yaxis: Option<YAxis<f32>>,
-    groups: Vec<Group>
+    groups: Vec<Group>,
 }
-
-
-const DEFAULT_X_SCALE: f64 = 8500.0;
-const DEFAULT_Y_SCALE: f64 = 4000.0;
-// const DEFAULT_ASPECT_RATIO: f64 = DEFAULT_X_SCALE / DEFAULT_Y_SCALE;
-
 
 impl Default for SpectrumSVG {
     fn default() -> Self {
         Self {
-            document: Document::new(),
-            intensity_scale: DEFAULT_Y_SCALE,
-            mz_scale: DEFAULT_X_SCALE,
+            canvas: Canvas::new(1400, 600),
             colors: Default::default(),
-            xticks: AxisLabelOptions {
-                tick_count: 7,
-                tick_font_size: 80.0,
-                label_font_size: 120.0,
-                tick_style: AxisTickLabelStyle::Precision(2),
-            },
-            yticks: AxisLabelOptions {
-                tick_count: 5,
-                tick_font_size: 80.0,
-                label_font_size: 120.0,
-                tick_style: AxisTickLabelStyle::Percentile(1),
-            },
-            xaxis: None,
-            yaxis: None,
+            xticks: AxisProps::new(AxisOrientation::Bottom).label("m/z").id("x-axis"),
+            yticks: AxisProps::new(AxisOrientation::Left)
+                .label("Intensity")
+                .tick_format(AxisTickLabelStyle::Percentile(2))
+                .id("y-axis"),
+            x_range: Default::default(),
+            y_range: Default::default(),
             finished: false,
-            groups: Vec::new()
+            groups: Vec::new(),
         }
     }
 }
 
 impl SpectrumSVG {
-    pub fn new(
-        document: Document,
-        aspect_ratio: f64,
-        colors: ColorCycle,
-        xticks: AxisLabelOptions,
-        yticks: AxisLabelOptions,
-        xaxis: Option<XAxis<f64>>,
-        yaxis: Option<YAxis<f32>>,
-        groups: Vec<Group>
-    ) -> Self {
+    pub fn with_size(width: usize, height: usize) -> Self {
+        Self::new(Canvas::new(width, height))
+    }
+
+    pub fn new(canvas: Canvas<f64, f32>) -> Self {
         let mut inst = Self {
-            document,
-            intensity_scale: DEFAULT_Y_SCALE,
-            mz_scale: DEFAULT_X_SCALE,
-            colors,
-            xticks,
-            yticks,
-            xaxis,
-            yaxis,
-            groups,
-            finished: false
-
+            canvas,
+            colors: Default::default(),
+            xticks: AxisProps::new(AxisOrientation::Bottom).label("m/z").id("x-axis"),
+            yticks: AxisProps::new(AxisOrientation::Left)
+                .label("Intensity")
+                .tick_format(AxisTickLabelStyle::Percentile(2))
+                .id("y-axis"),
+            x_range: Default::default(),
+            y_range: Default::default(),
+            groups: Default::default(),
+            finished: false,
         };
-        inst.set_aspect_ratio(aspect_ratio);
         inst
-    }
-
-    pub fn aspect_ratio(&self) -> f64 {
-        self.mz_scale / self.intensity_scale
-    }
-
-    pub fn set_aspect_ratio(&mut self, ratio: f64) {
-        self.intensity_scale = self.mz_scale / ratio;
-        if let Some(yaxis) = self.yaxis.as_mut() {
-            yaxis.scale = self.intensity_scale;
-        }
     }
 
     pub fn axes_from<
@@ -115,17 +84,12 @@ impl SpectrumSVG {
         &mut self,
         spectrum: &MultiLayerSpectrum<C, D>,
     ) -> &mut Self {
-        if self.yaxis.is_none() {
+        if self.y_range.is_none() {
             let tic = spectrum.peaks().base_peak().intensity;
-            let yaxis = YAxis::new(
-                (tic..0.0).into(),
-                "Rel. Intensity".to_string(),
-                self.intensity_scale,
-            );
-            self.yaxis = Some(yaxis);
+            self.y_range = Some(CoordinateRange::new(tic, 0.0));
         }
 
-        if self.xaxis.is_none() {
+        if self.x_range.is_none() {
             let (min_mz, max_mz) = spectrum
                 .acquisition()
                 .first_scan()
@@ -142,29 +106,28 @@ impl SpectrumSVG {
                 })
                 .unwrap_or_else(|| (50.0, 2000.0));
 
-            let xaxis = XAxis::new(
-                (min_mz * 0.95..max_mz * 1.05).into(),
-                "m/z".to_string(),
-                self.mz_scale,
-            );
-            self.xaxis = Some(xaxis);
+            let xaxis = CoordinateRange::new(min_mz * 0.95, max_mz * 1.05);
+            self.x_range = Some(xaxis);
         }
+
+        self.canvas
+            .update_scales(self.x_range.clone().unwrap(), self.y_range.clone().unwrap());
 
         self
     }
 
     pub fn xlim(&mut self, xlim: impl RangeBounds<f64>) -> &mut Self {
-        let axis = self.xaxis.as_mut().unwrap();
+        let axis = self.x_range.as_mut().unwrap();
         match xlim.start_bound() {
-            Bound::Included(v) => axis.coordinates.start = *v,
-            Bound::Excluded(v) => axis.coordinates.start = *v,
-            Bound::Unbounded => {},
+            Bound::Included(v) => axis.start = *v,
+            Bound::Excluded(v) => axis.start = *v,
+            Bound::Unbounded => {}
         }
 
         match xlim.end_bound() {
-            Bound::Included(v) => axis.coordinates.end = *v,
-            Bound::Excluded(v) => axis.coordinates.end = *v,
-            Bound::Unbounded => {},
+            Bound::Included(v) => axis.end = *v,
+            Bound::Excluded(v) => axis.end = *v,
+            Bound::Unbounded => {}
         }
         self
     }
@@ -179,15 +142,15 @@ impl SpectrumSVG {
             SeriesDescription::from("Profile".to_string()).with_color(self.colors.next().unwrap()),
         );
         series.slice_x(
-            self.xaxis.as_ref().unwrap().start(),
-            self.xaxis.as_ref().unwrap().end(),
+            self.x_range.as_ref().unwrap().start,
+            self.x_range.as_ref().unwrap().end,
         );
 
-        let xaxis = self.xaxis.as_ref().unwrap();
-        let yaxis = self.yaxis.as_ref().unwrap();
+        let xaxis = self.x_range.as_ref().unwrap();
+        let yaxis = self.y_range.as_ref().unwrap();
 
-        let sgroup = series.to_svg(&xaxis, &yaxis);
-        self.groups.push(sgroup);
+        let sgroup = series.to_svg(&self.canvas);
+        self.canvas.groups.push(sgroup);
     }
 
     pub fn draw_centroids<C: CentroidLike + Default + Clone + 'static>(
@@ -198,16 +161,14 @@ impl SpectrumSVG {
             peaks.iter().cloned(),
             SeriesDescription::from("Centroid".to_string()).with_color(self.colors.next().unwrap()),
         );
+
         series.slice_x(
-            self.xaxis.as_ref().unwrap().start(),
-            self.xaxis.as_ref().unwrap().end(),
+            self.x_range.as_ref().unwrap().start,
+            self.x_range.as_ref().unwrap().end,
         );
 
-        let xaxis = self.xaxis.as_ref().unwrap();
-        let yaxis = self.yaxis.as_ref().unwrap();
-
-        let sgroup = series.to_svg(&xaxis, &yaxis);
-        self.groups.push(sgroup);
+        let sgroup = series.to_svg(&self.canvas);
+        self.canvas.groups.push(sgroup);
     }
 
     pub fn draw_deconvoluted_centroids<
@@ -221,28 +182,23 @@ impl SpectrumSVG {
             SeriesDescription::from("Deconvolved".to_string())
                 .with_color(self.colors.next().unwrap()),
         );
+
         series.slice_x(
-            self.xaxis.as_ref().unwrap().start(),
-            self.xaxis.as_ref().unwrap().end(),
+            self.x_range.as_ref().unwrap().start,
+            self.x_range.as_ref().unwrap().end,
         );
 
-        let xaxis = self.xaxis.as_ref().unwrap();
-        let yaxis = self.yaxis.as_ref().unwrap();
-
-        let sgroup = series.to_svg(&xaxis, &yaxis);
-        self.groups.push(sgroup)
+        let sgroup = series.to_svg(&self.canvas);
+        self.canvas.groups.push(sgroup);
     }
 
     pub fn draw_series<S: PlotSeries<f64, f32>>(&mut self, mut series: S) {
         series.slice_x(
-            self.xaxis.as_ref().unwrap().start(),
-            self.xaxis.as_ref().unwrap().end(),
+            self.x_range.as_ref().unwrap().start,
+            self.x_range.as_ref().unwrap().end,
         );
 
-        let xaxis = self.xaxis.as_ref().unwrap();
-        let yaxis = self.yaxis.as_ref().unwrap();
-
-        let sgroup = series.to_svg(&xaxis, &yaxis);
+        let sgroup = series.to_svg(&self.canvas);
         self.groups.push(sgroup)
     }
 
@@ -272,50 +228,18 @@ impl SpectrumSVG {
 
     pub fn finish(&mut self) {
         if self.finished {
-            return
+            return;
         };
         self.finished = true;
-        let mut container = Group::new().set(
-            "transform",
-            format!(
-                "scale(0.9,0.9)translate({}, {})",
-                self.mz_scale * 0.1,
-                self.intensity_scale * 0.05
-            ),
-        );
-        let groups = mem::take(&mut self.groups);
-        let inner_container = Group::new().set("class", "canvas");
-        let inner_container = groups
-            .into_iter()
-            .fold(inner_container, |container, group| container.add(group));
-
-        let xaxis = self.xaxis.as_ref().unwrap();
-        let yaxis = self.yaxis.as_ref().unwrap();
-
-        let xgroup = xaxis.to_svg(&self.xticks, &yaxis);
-        let ygroup = yaxis.to_svg(&self.yticks, &xaxis);
-        container.append(inner_container);
-        container.append(xgroup);
-        container.append(ygroup);
-
-        self.document = self
-            .document
-            .clone()
-            .add(container)
-            .set(
-                "viewBox",
-                (0.0, 0.0, self.mz_scale * 1.08, self.intensity_scale * 1.04),
-            )
-            .set("preserveAspectRatio", "xMidYMid meet");
     }
 
     pub fn write<W: Write>(&self, stream: &mut W) -> io::Result<()> {
-        svg::write(stream, &self.document)?;
+        svg::write(stream, &self.canvas.to_svg(&self.xticks, &self.yticks))?;
         Ok(())
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: &P) -> io::Result<()> {
-        svg::save(path, &self.document)?;
+        svg::save(path, &self.canvas.to_svg(&self.xticks, &self.yticks))?;
         Ok(())
     }
 
@@ -341,10 +265,24 @@ impl SpectrumSVG {
 
         let tree = resvg::usvg::Tree::from_data(&buf, &svg_opts).unwrap();
 
-        let size = tree.size().to_int_size();
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width() as u32, size.height() as u32).unwrap();
+        let resolution_scale = 3.0;
+
+        let size = tree.size().to_int_size().scale_by(resolution_scale).unwrap();
+        let mut pixmap =
+            resvg::tiny_skia::Pixmap::new(size.width() as u32, size.height() as u32).unwrap();
         pixmap.fill(resvg::tiny_skia::Color::WHITE);
-        resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+
+        let ts = {
+            let size1 = tree.size();
+            let size2 = size1.to_int_size().scale_by(resolution_scale).unwrap().to_size();
+            resvg::tiny_skia::Transform::from_scale(size2.width() / size1.width(), size2.height() / size1.height())
+        };
+
+        resvg::render(
+            &tree,
+           ts,
+            &mut pixmap.as_mut(),
+        );
 
         stream.write_all(&pixmap.encode_png().unwrap())?;
         Ok(())
