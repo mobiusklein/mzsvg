@@ -1,19 +1,18 @@
-use std::{
-    fmt::{Display, LowerExp},
-    marker::PhantomData,
-};
+use std::marker::PhantomData;
 
+use mzdata::spectrum::{Precursor, PrecursorSelection};
 use mzpeaks::{
-    CentroidLike, DeconvolutedCentroidLike, IntensityMeasurement, MZLocated, MZPeakSetType,
-    MassPeakSetType,
+    CentroidLike, CentroidPeak, DeconvolutedCentroidLike, DeconvolutedPeak, DeconvolutedPeakSet,
+    IntensityMeasurement, MZLocated, MZPeakSetType, MassPeakSetType, PeakSet,
 };
 use num_traits::Float;
 
 use svg::node::element::{path::Data as PathData, Group, Path, Polyline};
 
-use super::chart_regions::{Canvas, TextProps};
+use super::chart_regions::{Canvas, RenderCoordinate, TextProps};
 
 const DEFAULT_COLOR_CYCLE: &'static [&'static str] = &[
+    "black",
     "steelblue",
     "blueviolet",
     "midnightblue",
@@ -52,34 +51,78 @@ impl Iterator for ColorCycle {
     }
 }
 
-pub trait PlotSeries<X: Float + Display + LowerExp, Y: Display + Float + LowerExp> {
+pub trait PlotSeries<X: RenderCoordinate, Y: RenderCoordinate> {
     fn description(&self) -> &SeriesDescription;
+
+    fn description_mut(&mut self) -> &mut SeriesDescription;
+
+    fn series_type(&self) -> String {
+        self.description().series_type()
+    }
+
+    fn series_id(&self) -> String {
+        self.description().id()
+    }
+
+    fn set_tag(&mut self, tag: String) {
+        self.description_mut().tag = tag
+    }
+
+    fn color(&self) -> String {
+        self.description().color.clone()
+    }
+
+    fn color_mut(&mut self) -> &mut String {
+        &mut self.description_mut().color
+    }
+
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group;
 
     fn slice_x(&mut self, start: X, end: X);
     fn slice_y(&mut self, start: Y, end: Y);
 }
 
-pub trait AsSeries<X: Float + Display + LowerExp, Y: Display + Float + LowerExp> {
+pub trait AsSeries<X: RenderCoordinate, Y: RenderCoordinate> {
     type Series: PlotSeries<X, Y>;
 
     fn as_series(&self) -> Self::Series;
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, T: AsSeries<X, Y>> AsSeries<X, Y> for &T {
+    type Series = <T as AsSeries<X, Y>>::Series;
+
+    fn as_series(&self) -> Self::Series {
+        (*self).as_series()
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SeriesDescription {
     pub label: String,
     pub color: String,
+    pub tag: String,
 }
 
 impl SeriesDescription {
     pub fn new(label: String, color: String) -> Self {
-        Self { label, color }
+        Self {
+            label,
+            color,
+            tag: String::new(),
+        }
     }
 
     pub fn with_color(mut self, color: String) -> Self {
         self.color = color;
         self
+    }
+
+    pub fn series_type(&self) -> String {
+        self.label.to_string()
+    }
+
+    pub fn id(&self) -> String {
+        format!("{}-{}", self.label, self.tag)
     }
 }
 
@@ -91,20 +134,22 @@ impl From<String> for SeriesDescription {
 
 impl From<&str> for SeriesDescription {
     fn from(value: &str) -> Self {
-        SeriesDescription::new(value.to_string(), "black".to_string())
+        value.to_string().into()
     }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct LineSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
+pub struct LineSeries<X: RenderCoordinate, Y: RenderCoordinate> {
     pub points: Vec<(X, Y)>,
     pub description: SeriesDescription,
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> LineSeries<X, Y> {
-
+impl<X: RenderCoordinate, Y: RenderCoordinate> LineSeries<X, Y> {
     pub fn new(points: Vec<(X, Y)>, description: SeriesDescription) -> Self {
-        Self { points, description }
+        Self {
+            points,
+            description,
+        }
     }
 
     pub fn from_iterators(
@@ -139,15 +184,20 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> LineSeries<X,
             .set("stroke", self.description.color.clone())
             .set("stroke-width", 1);
         let group = Group::new();
-        group.add(path)
+        group
+            .add(path)
+            .set("class", self.description.label.clone())
+            .set("id", self.description.id())
     }
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X, Y>
-    for LineSeries<X, Y>
-{
+impl<X: RenderCoordinate, Y: RenderCoordinate> PlotSeries<X, Y> for LineSeries<X, Y> {
     fn description(&self) -> &SeriesDescription {
         &self.description
+    }
+
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
     }
 
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
@@ -176,12 +226,12 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct ContinuousSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
+pub struct ContinuousSeries<X: RenderCoordinate, Y: RenderCoordinate> {
     pub points: Vec<(X, Y)>,
     pub description: SeriesDescription,
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> ContinuousSeries<X, Y> {
+impl<X: RenderCoordinate, Y: RenderCoordinate> ContinuousSeries<X, Y> {
     pub fn new(points: Vec<(X, Y)>, description: SeriesDescription) -> Self {
         Self {
             points,
@@ -205,7 +255,8 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> ContinuousSer
             .points
             .iter()
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-            .unwrap()
+            .copied()
+            .unwrap_or((X::zero(), Y::zero()))
             .0;
         let path_data = self
             .points
@@ -218,26 +269,26 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> ContinuousSer
                         canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
                     ));
                 }
-                state.line_to(
-                    canvas.transform(*mz, *inten)
-                )
+                state.line_to(canvas.transform(*mz, *inten))
             })
             .close();
-        let path = Path::new()
-            .set("fill", "none")
+        let path = Path::new().set("fill", "none").set("d", path_data);
+        let group = Group::new();
+        group
+            .add(path)
             .set("stroke", self.description.color.clone())
             .set("stroke-width", 1)
-            .set("d", path_data);
-        let group = Group::new();
-        group.add(path).set("class", self.description.label.clone())
+            .set("class", self.series_type())
+            .set("id", self.series_id())
     }
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X, Y>
-    for ContinuousSeries<X, Y>
-{
+impl<X: RenderCoordinate, Y: RenderCoordinate> PlotSeries<X, Y> for ContinuousSeries<X, Y> {
     fn description(&self) -> &SeriesDescription {
         &self.description
+    }
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
     }
 
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
@@ -266,17 +317,19 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct AnnotationSeries<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
+pub struct AnnotationSeries<X: RenderCoordinate, Y: RenderCoordinate> {
     pub points: Vec<(X, Y, String)>,
     pub description: SeriesDescription,
     pub text_props: TextProps,
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X, Y> for AnnotationSeries<X, Y> {
+impl<X: RenderCoordinate, Y: RenderCoordinate> PlotSeries<X, Y> for AnnotationSeries<X, Y> {
     fn description(&self) -> &SeriesDescription {
         &self.description
     }
-
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
+    }
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         self.to_svg(canvas)
     }
@@ -302,8 +355,7 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> PlotSeries<X,
     }
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> AnnotationSeries<X, Y> {
-
+impl<X: RenderCoordinate, Y: RenderCoordinate> AnnotationSeries<X, Y> {
     pub fn new(
         points: Vec<(X, Y, String)>,
         description: SeriesDescription,
@@ -323,9 +375,13 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> AnnotationSer
         description: SeriesDescription,
     ) -> Self {
         Self {
-            points: xiter.zip(yiter).zip(text_iter).map(|((x, y), text)| (x, y, text)).collect(),
+            points: xiter
+                .zip(yiter)
+                .zip(text_iter)
+                .map(|((x, y), text)| (x, y, text))
+                .collect(),
             description,
-            text_props: TextProps::default()
+            text_props: TextProps::default(),
         }
     }
 
@@ -333,8 +389,11 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> AnnotationSer
         let mut group = Group::new();
         for (x, y, text) in self.points.iter() {
             let (x2, y2) = canvas.transform(*x, *y);
-            eprintln!("{x} -> {x2}, {y} -> {y2}");
-            group = group.add(Group::new().set("transform", format!("translate({}, {})", x2, y2)).add(self.text_props.text(text.clone())))
+            group = group.add(
+                Group::new()
+                    .set("transform", format!("translate({}, {})", x2, y2))
+                    .add(self.text_props.text(text.clone())),
+            )
         }
         group
     }
@@ -355,7 +414,7 @@ mod mzdata_continuum {
             ContinuousSeries::from_iterators(
                 mzs.iter().copied(),
                 intensities.iter().copied(),
-                "Profile".into(),
+                "profile".into(),
             )
         }
     }
@@ -387,8 +446,8 @@ pub fn peaks_to_arrays<
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct CentroidSeries<
-    X: Float + Display + LowerExp,
-    Y: Float + Display + LowerExp,
+    X: RenderCoordinate,
+    Y: RenderCoordinate,
     T: CentroidLike + Clone + 'static,
 > {
     pub peaks: MZPeakSetType<T>,
@@ -397,16 +456,15 @@ pub struct CentroidSeries<
     _y: PhantomData<Y>,
 }
 
-impl<
-        X: Float + Display + LowerExp,
-        Y: Float + Display + LowerExp,
-        T: CentroidLike + Clone + 'static,
-    > PlotSeries<X, Y> for CentroidSeries<X, Y, T>
+impl<X: RenderCoordinate, Y: RenderCoordinate, T: CentroidLike + Clone + 'static> PlotSeries<X, Y>
+    for CentroidSeries<X, Y, T>
 {
     fn description(&self) -> &SeriesDescription {
         &self.description
     }
-
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
+    }
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         self.to_svg(canvas)
     }
@@ -435,11 +493,8 @@ impl<
     }
 }
 
-impl<
-        X: Float + Display + LowerExp,
-        Y: Float + Display + LowerExp,
-        T: CentroidLike + Clone + 'static,
-    > CentroidSeries<X, Y, T>
+impl<X: RenderCoordinate, Y: RenderCoordinate, T: CentroidLike + Clone + 'static>
+    CentroidSeries<X, Y, T>
 {
     pub fn new(peaks: MZPeakSetType<T>, description: SeriesDescription) -> Self {
         Self {
@@ -463,10 +518,18 @@ impl<
     }
 }
 
+impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for PeakSet {
+    type Series = CentroidSeries<X, Y, CentroidPeak>;
+
+    fn as_series(&self) -> Self::Series {
+        CentroidSeries::from_iterator(self.iter().cloned(), "centroid".into())
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeconvolutedCentroidSeries<
-    X: Float + Display + LowerExp,
-    Y: Float + Display + LowerExp,
+    X: RenderCoordinate,
+    Y: RenderCoordinate,
     T: DeconvolutedCentroidLike + Clone + MZLocated + 'static,
 > {
     pub peaks: MassPeakSetType<T>,
@@ -476,15 +539,17 @@ pub struct DeconvolutedCentroidSeries<
 }
 
 impl<
-        X: Float + Display + LowerExp,
-        Y: Float + Display + LowerExp,
+        X: RenderCoordinate,
+        Y: RenderCoordinate,
         T: DeconvolutedCentroidLike + Clone + MZLocated + 'static,
     > PlotSeries<X, Y> for DeconvolutedCentroidSeries<X, Y, T>
 {
     fn description(&self) -> &SeriesDescription {
         &self.description
     }
-
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
+    }
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
         self.to_svg(canvas)
     }
@@ -514,8 +579,8 @@ impl<
 }
 
 impl<
-        X: Float + Display + LowerExp,
-        Y: Float + Display + LowerExp,
+        X: RenderCoordinate,
+        Y: RenderCoordinate,
         T: DeconvolutedCentroidLike + Clone + 'static + MZLocated,
     > DeconvolutedCentroidSeries<X, Y, T>
 {
@@ -540,6 +605,104 @@ impl<
         let proxy = ContinuousSeries::new(points, self.description.clone());
         let group = proxy.to_svg(canvas);
         group
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for DeconvolutedPeakSet {
+    type Series = DeconvolutedCentroidSeries<X, Y, DeconvolutedPeak>;
+
+    fn as_series(&self) -> Self::Series {
+        Self::Series::from_iterator(self.iter().cloned(), "deconvoluted-centroid".into())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PrecursorSeries<X: RenderCoordinate, Y: RenderCoordinate> {
+    mz: X,
+    intensity: Y,
+    charge: Option<i32>,
+    in_frame: bool,
+    description: SeriesDescription,
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> PlotSeries<X, Y> for PrecursorSeries<X, Y> {
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
+    }
+
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        let root = Group::new();
+        if !self.in_frame {
+            return root;
+        }
+        let x = self.mz;
+        let y = self.intensity.min(canvas.y_axis.domain().max()) * Y::from(0.95).unwrap();
+        let z = self.charge.unwrap_or(0);
+        let s = format!("{x:0.2}, {z}");
+        let pts = vec![(x, y, s)];
+
+        let mut text_props = TextProps::default();
+        text_props.text_size = 0.8;
+        text_props.color = "skyblue".into();
+
+        let annot = AnnotationSeries::new(pts, "precursor-label".into(), text_props);
+        let annot_group = annot
+            .to_svg(&canvas)
+            .set("stroke", "black")
+            .set("stroke-width", "0.1pt");
+
+        let line_group = LineSeries::new(vec![(x, Y::zero()), (x, y)], "precursor-line".into())
+            .to_svg(&canvas)
+            .set("stroke-dasharray", 4)
+            .set("stroke", self.description.color.clone())
+            .set("stroke-width", "0.5pt");
+
+        root.add(annot_group)
+            .add(line_group)
+            .set("class", "precursor")
+            .set("id", self.description.id())
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        self.in_frame = start <= self.mz && self.mz <= end;
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        self.intensity = start.max(end);
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> PrecursorSeries<X, Y> {
+    pub fn new(mz: X, intensity: Y, charge: Option<i32>, description: SeriesDescription) -> Self {
+        Self {
+            mz,
+            intensity,
+            charge,
+            description,
+            in_frame: true,
+        }
+    }
+
+    pub fn from_precursor(precursor: &impl PrecursorSelection) -> Self {
+        let ion = precursor.ion();
+        Self::new(
+            X::from(ion.mz).unwrap(),
+            Y::from(ion.intensity).unwrap(),
+            ion.charge,
+            "precursor".into(),
+        )
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for Precursor {
+    type Series = PrecursorSeries<X, Y>;
+
+    fn as_series(&self) -> Self::Series {
+        Self::Series::from_precursor(self)
     }
 }
 

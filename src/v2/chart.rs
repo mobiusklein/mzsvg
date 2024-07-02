@@ -1,9 +1,8 @@
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::ops::Bound;
 use std::path::Path;
 use std::{fs, io, ops::RangeBounds};
-
-use svg::node::element::Group;
 
 use num_traits::Float;
 
@@ -14,14 +13,16 @@ use mzdata::{
 };
 
 use mzpeaks::{CentroidLike, DeconvolutedCentroidLike, MZLocated, MZPeakSetType, MassPeakSetType};
+use svg::node::element::{Group, Style as CSSStyle};
+use svg::{Document, Node};
 
 use super::chart_regions::{AxisOrientation, AxisProps, AxisTickLabelStyle, Canvas};
 use super::series::{
     CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, PlotSeries,
-    SeriesDescription,
+    PrecursorSeries, SeriesDescription,
 };
 
-use crate::{AnnotationSeries, CoordinateRange, LineSeries, TextProps};
+use crate::{AsSeries, CoordinateRange};
 
 #[derive(Debug, Clone)]
 pub struct SpectrumSVG {
@@ -32,7 +33,8 @@ pub struct SpectrumSVG {
     pub x_range: Option<CoordinateRange<f64>>,
     pub y_range: Option<CoordinateRange<f32>>,
     pub finished: bool,
-    groups: Vec<Group>,
+    pub series: HashMap<String, Vec<SeriesDescription>>,
+    pub custom_css: Option<String>,
 }
 
 impl Default for SpectrumSVG {
@@ -50,7 +52,8 @@ impl Default for SpectrumSVG {
             x_range: Default::default(),
             y_range: Default::default(),
             finished: false,
-            groups: Vec::new(),
+            series: HashMap::new(),
+            custom_css: None
         }
     }
 }
@@ -73,10 +76,19 @@ impl SpectrumSVG {
                 .id("y-axis"),
             x_range: Default::default(),
             y_range: Default::default(),
-            groups: Default::default(),
+            series: Default::default(),
             finished: false,
+            custom_css: None,
         };
         inst
+    }
+
+    pub fn canvas_mut(&mut self) -> &mut Canvas<f64, f32> {
+        &mut self.canvas
+    }
+
+    pub fn add_raw(&mut self, group: Group) {
+        self.canvas.push_layer(group);
     }
 
     pub fn axes_from<
@@ -86,30 +98,35 @@ impl SpectrumSVG {
         &mut self,
         spectrum: &MultiLayerSpectrum<C, D>,
     ) -> &mut Self {
+        let tic = spectrum.peaks().base_peak().intensity;
         if self.y_range.is_none() {
-            let tic = spectrum.peaks().base_peak().intensity;
             self.y_range = Some(CoordinateRange::new(tic, 0.0));
+        } else {
+            let y = self.y_range.as_mut().unwrap();
+            y.start = y.start.max(tic);
         }
 
+        let (min_mz, max_mz) = spectrum
+            .acquisition()
+            .first_scan()
+            .map(|s| {
+                s.scan_windows
+                    .iter()
+                    .fold((f64::infinity(), -f64::infinity()), |(min, max), w| {
+                        (
+                            (w.lower_bound as f64).min(min),
+                            (w.upper_bound as f64).max(max),
+                        )
+                    })
+            })
+            .unwrap_or_else(|| (50.0, 2000.0));
         if self.x_range.is_none() {
-            let (min_mz, max_mz) = spectrum
-                .acquisition()
-                .first_scan()
-                .map(|s| {
-                    s.scan_windows.iter().fold(
-                        (f64::infinity(), -f64::infinity()),
-                        |(min, max), w| {
-                            (
-                                (w.lower_bound as f64).min(min),
-                                (w.upper_bound as f64).max(max),
-                            )
-                        },
-                    )
-                })
-                .unwrap_or_else(|| (50.0, 2000.0));
-
             let xaxis = CoordinateRange::new(min_mz * 0.95, max_mz * 1.05);
             self.x_range = Some(xaxis);
+        } else {
+            let x = self.x_range.as_mut().unwrap();
+            x.start = x.start.min(min_mz);
+            x.end = x.end.max(max_mz);
         }
 
         self.canvas
@@ -131,7 +148,25 @@ impl SpectrumSVG {
             Bound::Excluded(v) => axis.end = *v,
             Bound::Unbounded => {}
         }
+
+        self.canvas
+            .update_scales(self.x_range.clone().unwrap(), self.y_range.clone().unwrap());
+
         self
+    }
+
+    pub fn add_series(&mut self, mut series: impl PlotSeries<f64, f32>) {
+        let descr = series.description();
+        let tag = self.add_series_description(descr.clone());
+        series.set_tag(tag);
+        self.draw_series(series);
+    }
+
+    fn add_series_description(&mut self, descr: SeriesDescription) -> String {
+        let tag = descr.series_type();
+        let bucket = self.series.entry(tag).or_default();
+        bucket.push(descr);
+        bucket.len().to_string()
     }
 
     pub fn draw_profile(&mut self, arrays: &BinaryArrayMap) {
@@ -141,7 +176,7 @@ impl SpectrumSVG {
         let mut series = ContinuousSeries::from_iterators(
             mzs.iter().copied(),
             intensities.iter().copied(),
-            SeriesDescription::from("Profile".to_string()).with_color(self.colors.next().unwrap()),
+            SeriesDescription::from("profile".to_string()).with_color(self.colors.next().unwrap()),
         );
         series.slice_x(
             self.x_range.as_ref().unwrap().start,
@@ -149,7 +184,7 @@ impl SpectrumSVG {
         );
 
         let sgroup = series.to_svg(&self.canvas);
-        self.canvas.groups.push(sgroup);
+        self.canvas.push_layer(sgroup);
     }
 
     pub fn draw_centroids<C: CentroidLike + Default + Clone + 'static>(
@@ -158,16 +193,12 @@ impl SpectrumSVG {
     ) {
         let mut series = CentroidSeries::from_iterator(
             peaks.iter().cloned(),
-            SeriesDescription::from("Centroid".to_string()).with_color(self.colors.next().unwrap()),
+            SeriesDescription::from("centroid".to_string()),
         );
 
-        series.slice_x(
-            self.x_range.as_ref().unwrap().start,
-            self.x_range.as_ref().unwrap().end,
-        );
+        *series.color_mut() = self.colors.next().unwrap();
 
-        let sgroup = series.to_svg(&self.canvas);
-        self.canvas.groups.push(sgroup);
+        self.add_series(series);
     }
 
     pub fn draw_deconvoluted_centroids<
@@ -178,27 +209,26 @@ impl SpectrumSVG {
     ) {
         let mut series = DeconvolutedCentroidSeries::from_iterator(
             peaks.iter().cloned(),
-            SeriesDescription::from("Deconvolved".to_string())
-                .with_color(self.colors.next().unwrap()),
+            SeriesDescription::from("deconvoluted-centroid".to_string()),
         );
-
-        series.slice_x(
-            self.x_range.as_ref().unwrap().start,
-            self.x_range.as_ref().unwrap().end,
-        );
-
-        let sgroup = series.to_svg(&self.canvas);
-        self.canvas.groups.push(sgroup);
+        *series.color_mut() = self.colors.next().unwrap();
+        self.add_series(series);
     }
 
-    pub fn draw_series<S: PlotSeries<f64, f32>>(&mut self, mut series: S) {
+    pub fn add_as_series(&mut self, t: &impl AsSeries<f64, f32>) {
+        let mut series = t.as_series();
+        series.description_mut().color = self.colors.next().unwrap();
+        self.add_series(series)
+    }
+
+    fn draw_series<S: PlotSeries<f64, f32>>(&mut self, mut series: S) {
         series.slice_x(
             self.x_range.as_ref().unwrap().start,
             self.x_range.as_ref().unwrap().end,
         );
 
         let sgroup = series.to_svg(&self.canvas);
-        self.groups.push(sgroup)
+        self.canvas.push_layer(sgroup)
     }
 
     pub fn draw_spectrum<
@@ -208,12 +238,13 @@ impl SpectrumSVG {
         &mut self,
         spectrum: &MultiLayerSpectrum<C, D>,
     ) {
-        self.axes_from(&spectrum);
+        if self.x_range.is_none() {
+            self.axes_from(spectrum);
+        }
 
         if spectrum.signal_continuity() == SignalContinuity::Profile {
             let arrays = spectrum.raw_arrays().unwrap();
-
-            self.draw_profile(&arrays);
+            self.add_as_series(arrays);
         }
 
         if let Some(peaks) = spectrum.peaks.as_ref() {
@@ -225,28 +256,13 @@ impl SpectrumSVG {
         }
 
         if let Some(precursor) = spectrum.precursor() {
-            let x = precursor.ion().mz();
-            let y = precursor
-                .ion()
-                .intensity
-                .min(self.y_range.clone().unwrap().max())
-                * 0.95;
-            let z = precursor.ion().charge().unwrap_or(0);
-            let s = format!("{x:0.2}, {z}");
-            let pts = vec![(x, y, s)];
-            let mut text_props = TextProps::default();
-            text_props.text_size = 0.8;
-            text_props.color = "skyblue".into();
-
-            let annot = AnnotationSeries::new(pts, "Precursor".into(), text_props);
-            let mut group = annot.to_svg(&self.canvas);
-            group = group.set("stroke", "black").set("stroke-width", "0.1pt");
-            self.canvas.groups.push(group);
-
-            group = LineSeries::new(vec![(x, 0.0), (x, y)], "Precursor-Line".into()).to_svg(&self.canvas);
-            group = group.set("stroke-dasharray", 4).set("stroke", "black").set("stroke-width", "0.5pt");
-            self.canvas.groups.push(group)
+            self.add_as_series(precursor);
         }
+    }
+
+    pub fn draw_precursor(&mut self, precursor: &impl PrecursorSelection) {
+        let series = PrecursorSeries::from_precursor(precursor);
+        self.draw_series(series);
     }
 
     pub fn finish(&mut self) {
@@ -256,13 +272,29 @@ impl SpectrumSVG {
         self.finished = true;
     }
 
+    fn make_document(&self) -> Document {
+        let mut document = Document::new();
+        if let Some(css) = self.custom_css.as_ref() {
+            let style = CSSStyle::new(css.to_string());
+            document.append(style);
+        }
+        document.append(self.canvas.to_svg(&self.xticks, &self.yticks));
+        document
+    }
+
+    pub fn to_string(&self) -> String {
+        self.make_document().to_string()
+    }
+
     pub fn write<W: Write>(&self, stream: &mut W) -> io::Result<()> {
-        svg::write(stream, &self.canvas.to_svg(&self.xticks, &self.yticks))?;
+        let doc = self.make_document();
+        svg::write(stream, &doc)?;
         Ok(())
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: &P) -> io::Result<()> {
-        svg::save(path, &self.canvas.to_svg(&self.xticks, &self.yticks))?;
+        let mut fh = io::BufWriter::new(fs::File::create(path)?);
+        self.write(&mut fh)?;
         Ok(())
     }
 

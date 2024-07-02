@@ -2,12 +2,14 @@ use std::fmt::{Display, LowerExp};
 
 use num_traits::Float;
 
-use svg::{
-    node::element::{path::Data as PathData, Group, Line, Path, Text},
-    Document,
-};
+use svg::node::element::{path::Data as PathData, Group, Line, Path, Text};
 
 use crate::linear::{CoordinateRange, Scale};
+
+pub trait RenderCoordinate: Float + Display + LowerExp {}
+
+impl<T: Float + Display + LowerExp> RenderCoordinate for T {}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisOrientation {
@@ -35,16 +37,69 @@ pub struct Sides {
     pub left: f64,
 }
 
+
 #[derive(Debug, Clone)]
-pub struct Canvas<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> {
+pub struct DrawBox<X: RenderCoordinate, Y: RenderCoordinate> {
     pub width: usize,
     pub height: usize,
     pub x_axis: XAxis<X>,
     pub y_axis: YAxis<Y>,
     pub groups: Vec<Group>,
+    pub origin: (X, Y),
 }
 
-impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> Canvas<X, Y> {
+#[allow(unused)]
+impl<X: RenderCoordinate, Y: RenderCoordinate> DrawBox<X, Y> {
+    pub fn new(width: usize, height: usize, groups: Vec<Group>, origin: (X, Y)) -> Self {
+        let domain = CoordinateRange::new(X::zero(), X::from(width).unwrap());
+        let range = domain.clone();
+        let x_axis = XAxis::new(Scale::new(domain, range));
+
+        let domain = CoordinateRange::new(Y::zero(), Y::from(height).unwrap());
+        let range = domain.clone();
+        let y_axis = YAxis::new(Scale::new(domain, range));
+
+        Self { width, height, x_axis, y_axis, groups, origin }
+    }
+
+    pub fn update_scales(&mut self, x_range: CoordinateRange<X>, y_range: CoordinateRange<Y>) {
+        self.x_axis.scale.domain = x_range;
+        self.y_axis.scale.domain = y_range;
+    }
+
+    pub fn transform(&self, x: X, y: Y) -> (f64, f64) {
+        (
+            self.x_axis.scale.transform(x).to_f64().unwrap(),
+            self.y_axis.scale.transform(y).to_f64().unwrap(),
+        )
+    }
+
+    pub fn push_layer(&mut self, group: Group) {
+        self.groups.push(group)
+    }
+
+    pub fn to_svg(&self) -> Group {
+        let group = self.groups.iter().fold(
+            Group::new().set("class", "draw-box"),
+            |holder, series| holder.add(series.clone()),
+        );
+        group
+    }
+
+}
+
+
+#[derive(Debug, Clone)]
+pub struct Canvas<X: RenderCoordinate, Y: RenderCoordinate> {
+    pub width: usize,
+    pub height: usize,
+    pub x_axis: XAxis<X>,
+    pub y_axis: YAxis<Y>,
+    pub groups: Vec<Group>,
+    pub subplot_offset: Option<(X, Y)>
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> Canvas<X, Y> {
     pub fn new(width: usize, height: usize) -> Self {
         let domain = CoordinateRange::new(X::zero(), X::from(width).unwrap());
         let range = domain.clone();
@@ -60,6 +115,7 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> Canvas<X, Y> 
             x_axis,
             y_axis,
             groups: Vec::new(),
+            subplot_offset: None
         }
     }
 
@@ -75,9 +131,11 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> Canvas<X, Y> 
         )
     }
 
-    pub fn to_svg(&self, x_axis_props: &AxisProps<X>, y_axis_props: &AxisProps<Y>) -> Document {
-        let doc = Document::new();
+    pub fn push_layer(&mut self, group: Group) {
+        self.groups.push(group)
+    }
 
+    pub fn to_svg(&self, x_axis_props: &AxisProps<X>, y_axis_props: &AxisProps<Y>) -> Group {
         let data = self.groups.iter().fold(
             Group::new().set("class", "data-canvas"),
             |holder, series| holder.add(series.clone()),
@@ -97,11 +155,11 @@ impl<X: Float + Display + LowerExp, Y: Float + Display + LowerExp> Canvas<X, Y> 
             .add(x_axis_props.to_svg(&self.x_axis.scale, &self))
             .add(y_axis_props.to_svg(&self.y_axis.scale, &self));
 
-        doc.add(group)
+        group
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct XAxis<T: Float> {
     pub scale: Scale<T>,
 }
@@ -110,9 +168,17 @@ impl<T: Float> XAxis<T> {
     pub fn new(scale: Scale<T>) -> Self {
         Self { scale }
     }
+
+    pub fn domain(&self) -> &CoordinateRange<T> {
+        &self.scale.domain
+    }
+
+    pub fn range(&self) -> &CoordinateRange<T> {
+        &self.scale.range
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct YAxis<T: Float> {
     pub scale: Scale<T>,
 }
@@ -120,6 +186,14 @@ pub struct YAxis<T: Float> {
 impl<T: Float> YAxis<T> {
     pub fn new(scale: Scale<T>) -> Self {
         Self { scale }
+    }
+
+    pub fn domain(&self) -> &CoordinateRange<T> {
+        &self.scale.domain
+    }
+
+    pub fn range(&self) -> &CoordinateRange<T> {
+        &self.scale.range
     }
 }
 
@@ -148,7 +222,7 @@ impl Default for AxisTickLabelStyle {
 }
 
 impl AxisTickLabelStyle {
-    pub fn format<F: Float + Display + LowerExp>(
+    pub fn format<F: RenderCoordinate>(
         &self,
         value: &F,
         scale: &CoordinateRange<F>,
@@ -173,7 +247,7 @@ pub struct AxisLabelOptions {
 }
 
 #[derive(Debug, Clone)]
-pub struct AxisProps<T: Float + Display + LowerExp> {
+pub struct AxisProps<T: RenderCoordinate> {
     pub tick_padding: f64,
     pub tick_size_outer: f64,
     pub tick_size_inner: f64,
@@ -189,7 +263,7 @@ pub struct AxisProps<T: Float + Display + LowerExp> {
 pub const DEFAULT_TICK_LABEL_SIZE: f64 = 10.0;
 pub const DEFAULT_AXIS_LABEL_SIZE: f64 = 14.0;
 
-impl<T: Float + Display + LowerExp> AxisProps<T> {
+impl<T: RenderCoordinate> AxisProps<T> {
     pub fn new(axis_orientation: AxisOrientation) -> Self {
         Self {
             tick_format: AxisTickLabelStyle::Precision(2),
@@ -231,7 +305,7 @@ impl<T: Float + Display + LowerExp> AxisProps<T> {
         self.tick_size_outer + self.tick_size_inner.max(0.0) + self.tick_padding
     }
 
-    pub fn to_svg<X: Float + Display + LowerExp, Y: Float + Display + LowerExp>(
+    pub fn to_svg<X: RenderCoordinate, Y: RenderCoordinate>(
         &self,
         scale: &Scale<T>,
         canvas: &Canvas<X, Y>,
