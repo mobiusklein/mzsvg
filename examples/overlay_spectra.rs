@@ -7,14 +7,14 @@ use mzdata::{
     MZReader,
 };
 
-use mzsvg::{util::{parse_dimensions, Dimensions, MZRange}, ContinuousSeries, SeriesDescription, SpectrumSVG};
+use mzsvg::{util::{Dimensions, MZRange}, ContinuousSeries, SeriesDescription, SpectrumSVG};
 
 #[derive(Debug, Parser)]
 struct App {
     #[arg(short = 'm', long)]
     mz_range: Option<MZRange>,
 
-    #[arg(short='d', long="dimensions", default_value_t=Dimensions(600, 200), value_parser=parse_dimensions)]
+    #[arg(short='d', long="dimensions", default_value_t=Dimensions(600, 200))]
     dimensions: Dimensions,
 
     #[arg()]

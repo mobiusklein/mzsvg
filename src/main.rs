@@ -1,7 +1,5 @@
-use std::fmt::Display;
 use std::io;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use clap::Parser;
 
@@ -12,7 +10,7 @@ use mzdata::prelude::*;
 use mzdata::spectrum::{SignalContinuity, SpectrumLike};
 use mzsvg::SpectrumSVG;
 
-use mzsvg::util::{MZRange, Dimensions, parse_dimensions};
+use mzsvg::util::{MZRange, Dimensions};
 
 
 #[derive(Parser, Default, Debug)]
@@ -23,11 +21,14 @@ struct App {
     #[arg(short = 's', long = "scan-number")]
     scan_number: usize,
 
-    #[arg(short='m', long="mz-range", value_parser=MZRange::from_str, value_name="BEGIN-END", default_value_t=MZRange::default())]
+    #[arg(short='m', long="mz-range", value_name="BEGIN-END", default_value_t=MZRange::default())]
     mz_range: MZRange,
 
-    #[arg(short='d', long="dimensions", default_value_t=Dimensions(600, 200), value_parser=parse_dimensions)]
+    #[arg(short='d', long="dimensions", default_value_t=Dimensions(600, 200))]
     dimensions: Dimensions,
+
+    #[arg(short='o', long="output-path", default_value="image.svg", help="Where to save the image to.")]
+    output_path: String,
 
     #[arg(short = 'r', long = "reprofile", default_value_t = false)]
     reprofile: bool,
@@ -63,11 +64,13 @@ fn main() -> io::Result<()> {
             }
         }
         document.finish();
-        document.save(&"image.svg")?;
+
+        let output_path = PathBuf::from(args.output_path);
+        document.save(&output_path.with_extension("svg"))?;
 
         #[cfg(feature = "pdf")]
         if args.pdf {
-            document.save_pdf(&"image.pdf")?;
+            document.save_pdf(output_path.with_extension("pdf"))?;
         }
         #[cfg(not(feature = "pdf"))]
         if args.pdf {
@@ -76,7 +79,7 @@ fn main() -> io::Result<()> {
 
         #[cfg(feature = "png")]
         if args.png {
-            document.save_png(&"image.png")?;
+            document.save_png(output_path.with_extension("png"))?;
         }
         #[cfg(not(feature = "png"))]
         if args.png {

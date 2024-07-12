@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use mzdata::spectrum::{Precursor, PrecursorSelection};
 use mzpeaks::{
+    feature::{ChargedFeature, Feature, FeatureLike, SimpleFeature},
     CentroidLike, CentroidPeak, DeconvolutedCentroidLike, DeconvolutedPeak, DeconvolutedPeakSet,
     IntensityMeasurement, MZLocated, MZPeakSetType, MassPeakSetType, PeakSet,
 };
@@ -703,6 +704,161 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for Precursor {
 
     fn as_series(&self) -> Self::Series {
         Self::Series::from_precursor(self)
+    }
+}
+
+pub struct TraceSeries<X: RenderCoordinate, Y: RenderCoordinate, C1, C2, F: FeatureLike<C1, C2>> {
+    pub feature: F,
+    points: Vec<(X, Y)>,
+    pub description: SeriesDescription,
+    _c1: PhantomData<C1>,
+    _c2: PhantomData<C2>,
+    _x: PhantomData<X>,
+    _y: PhantomData<Y>,
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, C1, C2, F: FeatureLike<C1, C2>>
+    TraceSeries<X, Y, C1, C2, F>
+{
+    pub fn new(feature: F, description: SeriesDescription) -> Self {
+        let points: Vec<(X, Y)> = feature
+            .iter()
+            .map(|(_, time, inten)| (X::from(*time).unwrap(), Y::from(*inten).unwrap()))
+            .collect();
+
+        Self {
+            feature,
+            description,
+            points,
+            _c1: PhantomData,
+            _c2: PhantomData,
+            _x: PhantomData,
+            _y: PhantomData,
+        }
+    }
+
+    pub fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        let start_time = self
+            .points
+            .iter()
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .copied()
+            .unwrap_or((X::zero(), Y::zero()))
+            .0;
+        let end_time = self
+            .points
+            .iter()
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .copied()
+            .unwrap_or((X::zero(), Y::zero()))
+            .0;
+        let path_data = self
+            .points
+            .iter()
+            .enumerate()
+            .fold(PathData::new(), |mut state, (i, (time, inten))| {
+                if i == 0 {
+                    state = state.move_to((
+                        canvas.x_axis.scale.transform(start_time).to_f64().unwrap(),
+                        canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
+                    ));
+                }
+                state.line_to(canvas.transform(X::from(*time).unwrap(), Y::from(*inten).unwrap()))
+            })
+            .line_to((
+                canvas.x_axis.scale.transform(end_time).to_f64().unwrap(),
+                canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
+            ))
+            .line_to((
+                canvas.x_axis.scale.transform(start_time).to_f64().unwrap(),
+                canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
+            ))
+            .close();
+        let path = Path::new()
+            .set("fill", self.color())
+            .set("d", path_data.clone())
+            .set("fill-opacity", "75%");
+        // let path2 = Path::new().set("fill", "none").set("d", path_data.clone());
+        let group = Group::new();
+        group
+            .add(path)
+            // .add(path2)
+            .set("stroke", "black")
+            .set("stroke-width", 1)
+            .set("class", self.series_type())
+            .set("id", self.series_id())
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, C1, C2, F: FeatureLike<C1, C2>> PlotSeries<X, Y>
+    for TraceSeries<X, Y, C1, C2, F>
+{
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
+    }
+
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.to_svg(canvas)
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        let points = self
+            .points
+            .iter()
+            .copied()
+            .filter(|(x, _)| (x >= &start) && (x <= &end))
+            .collect();
+        self.points = points;
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        let points = self
+            .points
+            .iter()
+            .copied()
+            .filter(|(_, y)| (y >= &start) && (y <= &end))
+            .collect();
+        self.points = points;
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, C1: Clone, C2: Clone> AsSeries<X, Y>
+    for Feature<C1, C2>
+where
+    Feature<C1, C2>: FeatureLike<C1, C2>,
+{
+    type Series = TraceSeries<X, Y, C1, C2, Feature<C1, C2>>;
+
+    fn as_series(&self) -> Self::Series {
+        Self::Series::new((*self).clone(), SeriesDescription::from("feature"))
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, C1: Clone, C2: Clone> AsSeries<X, Y>
+    for ChargedFeature<C1, C2>
+where
+    ChargedFeature<C1, C2>: FeatureLike<C1, C2>,
+{
+    type Series = TraceSeries<X, Y, C1, C2, ChargedFeature<C1, C2>>;
+
+    fn as_series(&self) -> Self::Series {
+        Self::Series::new((*self).clone(), SeriesDescription::from("charged-feature"))
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, C1: Clone, C2: Clone> AsSeries<X, Y>
+    for SimpleFeature<C1, C2>
+where
+    SimpleFeature<C1, C2>: FeatureLike<C1, C2>,
+{
+    type Series = TraceSeries<X, Y, C1, C2, SimpleFeature<C1, C2>>;
+
+    fn as_series(&self) -> Self::Series {
+        Self::Series::new((*self).clone(), SeriesDescription::from("simple-feature"))
     }
 }
 

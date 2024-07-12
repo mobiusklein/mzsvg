@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, num::ParseFloatError, ops::{Bound, Range, RangeBounds}, str::FromStr};
+use std::{error::Error, fmt::Display, num::{ParseFloatError, ParseIntError}, ops::{Bound, Range, RangeBounds}, str::FromStr};
 
 
 
@@ -136,11 +136,29 @@ impl Display for Dimensions {
     }
 }
 
-pub fn parse_dimensions(dims: &str) -> Result<Dimensions, std::num::ParseIntError> {
-    let r: Result<Vec<usize>, std::num::ParseIntError> = dims.split("x").map(|s| s.parse::<usize>()).collect();
+impl FromStr for Dimensions {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_dimensions(s)
+    }
+}
+
+pub fn parse_dimensions(dims: &str) -> Result<Dimensions, ParseIntError> {
+    let r: Result<Vec<usize>, ParseIntError> = dims.split("x").map(|s| s.parse::<usize>()).collect();
     let r = r?;
 
-    let width = r[0];
-    let height = r[1];
-    Ok(Dimensions(width, height))
+    if r.is_empty() {
+        return Err("".parse::<usize>().unwrap_err())
+    }
+
+    let dim = if r.len() == 1 {
+        let width = r[0];
+        Dimensions(width, width)
+    } else {
+        let width = r[0];
+        let height = r[1];
+        Dimensions(width, height)
+    };
+    Ok(dim)
 }

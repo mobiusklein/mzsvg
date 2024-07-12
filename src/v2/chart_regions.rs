@@ -284,6 +284,10 @@ impl<T: RenderCoordinate> AxisProps<T> {
         self
     }
 
+    pub fn set_label<S: ToString>(&mut self, label: S) {
+        self.label = Some(label.to_string());
+    }
+
     pub fn tick_format(mut self, style: AxisTickLabelStyle) -> Self {
         self.tick_format = style;
         self
