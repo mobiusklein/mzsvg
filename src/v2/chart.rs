@@ -22,7 +22,7 @@ use svg::{Document, Node};
 use super::chart_regions::{AxisOrientation, AxisProps, AxisTickLabelStyle, Canvas};
 use super::series::{
     CentroidSeries, ColorCycle, ContinuousSeries, DeconvolutedCentroidSeries, PlotSeries,
-    PrecursorSeries, SeriesDescription,
+    SeriesDescription,
 };
 
 use crate::{AsSeries, CoordinateRange};
@@ -363,13 +363,10 @@ impl SpectrumSVG {
         }
 
         if let Some(precursor) = spectrum.precursor() {
-            self.add_as_series(precursor);
+            if precursor.ion().intensity > 0.0 {
+                self.add_as_series(precursor);
+            }
         }
-    }
-
-    pub fn draw_precursor(&mut self, precursor: &impl PrecursorSelection) {
-        let series = PrecursorSeries::from_precursor(precursor);
-        self.draw_series(series);
     }
 
     pub fn finish(&mut self) {

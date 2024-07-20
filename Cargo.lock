@@ -560,9 +560,9 @@ dependencies = [
 
 [[package]]
 name = "mzdata"
-version = "0.21.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09fdf3531191168ca9a0c779b634ec6a389028fc99d37acb42b8919e84167f44"
+checksum = "0a246fdc7ad99e78c7669c22c3feb3bf228cd471d01be444c24ae54fffa4d544"
 dependencies = [
  "base16ct",
  "base64-simd",
@@ -596,9 +596,9 @@ dependencies = [
 
 [[package]]
 name = "mzsignal"
-version = "0.15.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80e4db75e251a5b98a9cfda6819da34567f60ddf1a4b545197bc0d372decc338"
+checksum = "945233ad2901542db3e6d8ca7108c28070c4a8585053cd82083853a0bdcddf7a"
 dependencies = [
  "cfg-if",
  "log",
@@ -616,7 +616,6 @@ dependencies = [
  "fontdb",
  "mzdata",
  "mzpeaks",
- "nalgebra",
  "num-traits",
  "resvg",
  "svg",

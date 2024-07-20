@@ -5,9 +5,6 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[[bin]]
-name = "mzsvg"
-
 [lib]
 
 [features]
@@ -16,12 +13,13 @@ png = ["resvg", "fontdb"]
 pdf = ["svg2pdf", "fontdb"]
 
 [dependencies]
-clap = { version = "4.5.4", features = ["derive"] }
-mzdata = { version = ">= 0.21.0", features = ["mzsignal", "nalgebra"]}
+mzdata = { version = ">= 0.24.0", features = ["mzsignal", "nalgebra"]}
 mzpeaks = ">=0.17.0"
-nalgebra = "0.32.3"
-num-traits = "0.2.17"
+num-traits = ">=0.2"
 resvg = { version = "0.42.0", optional = true, features = ["text", "system-fonts", "memmap-fonts"] }
 svg2pdf = { version = "0.11.0", optional = true }
 fontdb = { version = "0.18.0", optional = true }
 svg = "0.17.0"
+
+[dev-dependencies]
+clap = { version = "4.5.4", features = ["derive"] }

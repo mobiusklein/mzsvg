@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use mzdata;
-use mzdata::io::MZFileReader;
 use mzdata::prelude::*;
 #[allow(unused)]
 use mzdata::spectrum::{SignalContinuity, SpectrumLike};
@@ -48,8 +47,11 @@ fn main() -> io::Result<()> {
 
     let mut document = SpectrumSVG::with_size(args.dimensions.0, args.dimensions.1);
 
-    let mut reader = mzdata::MZReader::open_path(path)?;
-    if let Some(mut spectrum) = reader.get_spectrum_by_index(scan_index) {
+    let spectrum = mzdata::mz_read!(path.as_ref(), reader => {
+        reader.get_spectrum_by_index(scan_index)
+    })?;
+
+    if let Some(mut spectrum) = spectrum {
         let _has_deconv = spectrum.try_build_deconvoluted_centroids().is_ok();
         let has_centroid = spectrum.try_build_centroids().is_ok();
         document.axes_from(&spectrum).xlim(args.mz_range);
