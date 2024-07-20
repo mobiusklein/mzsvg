@@ -8,7 +8,7 @@ pdf:
     svg2pdf image.svg image.pdf
 
 changelog tag:
-    git cliff -t {{tag}}
+    git cliff -t {{tag}} -o CHANGELOG.md
 
 release tag: (changelog tag)
     git add CHANGELOG.md
