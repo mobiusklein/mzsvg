@@ -8,11 +8,11 @@ use mzpeaks::{
 };
 use num_traits::Float;
 
-use svg::node::element::{path::Data as PathData, Group, Path, Polyline};
+use svg::node::element::{path::Data as PathData, Circle, Group, Path, Polyline};
 
 use super::chart_regions::{Canvas, RenderCoordinate, TextProps};
 
-const DEFAULT_COLOR_CYCLE: &'static [&'static str] = &[
+pub const DEFAULT_COLOR_CYCLE: &'static [&'static str] = &[
     "black",
     "steelblue",
     "blueviolet",
@@ -862,6 +862,61 @@ where
     }
 }
 
+pub struct ScatterSeries<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone> {
+    pub points: Vec<(X, Y, R)>,
+    pub description: SeriesDescription,
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone> PlotSeries<X, Y>
+    for ScatterSeries<X, Y, R>
+{
+    fn description(&self) -> &SeriesDescription {
+        &self.description
+    }
+
+    fn description_mut(&mut self) -> &mut SeriesDescription {
+        &mut self.description
+    }
+
+    fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
+        self.points.iter().fold(Group::new(), |group, (x, y, r)| {
+            group.add(
+                Circle::new()
+                    .set("cx", canvas.x_axis.scale.transform(*x).to_f64().unwrap())
+                    .set("cy", canvas.y_axis.scale.transform(*y).to_f64().unwrap())
+                    .set("r", r.clone())
+            )
+        })
+        .set("class", self.series_type())
+        .set("id", self.series_id())
+        .set("fill", self.color())
+        .set("stroke", "black")
+    }
+
+    fn slice_x(&mut self, start: X, end: X) {
+        self.points = std::mem::take(&mut self.points)
+            .into_iter()
+            .filter(|(x, ..)| *x >= start && *x <= end)
+            .collect();
+    }
+
+    fn slice_y(&mut self, start: Y, end: Y) {
+        self.points = std::mem::take(&mut self.points)
+            .into_iter()
+            .filter(|(_, y, ..)| *y >= start && *y <= end)
+            .collect();
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone> ScatterSeries<X, Y, R> {
+    pub fn new(points: Vec<(X, Y, R)>, description: SeriesDescription) -> Self {
+        Self {
+            points,
+            description,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{
@@ -895,5 +950,32 @@ mod test {
         canvas.groups.push(series.to_svg(&canvas));
 
         let _ = canvas.to_svg(&props, &props2);
+    }
+
+    #[test]
+    fn test_scatter() {
+        let mut canvas: Canvas<f64, f32> = Canvas::new(600, 200);
+        canvas.update_scales(
+            CoordinateRange::new(0.0, 1000.0),
+            CoordinateRange::new(10000.0, 0.0),
+        );
+
+        let mut props: AxisProps<f64> = AxisProps::new(AxisOrientation::Bottom);
+        props.tick_values = Some(vec![0.0, 200.0, 400.0, 600.0, 800.0, 1000.0]);
+        props.label = Some("m/z".to_string());
+
+        let mut props2: AxisProps<f32> = AxisProps::new(AxisOrientation::Left);
+        props2.tick_values = Some(vec![10000.0, 7500.05, 5000.0, 2500.0, 0.0]);
+        props2.label = Some("Intensity".to_string());
+
+        let series = ScatterSeries {
+            points: vec![(250.0, 7000.5, 25), (350.0, 150.0, 50), (571.0, 4000.0, 50)],
+            description: "test".into(),
+        };
+
+        canvas.groups.push(series.to_svg(&canvas));
+
+        let doc = canvas.to_svg(&props, &props2);
+        eprintln!("{}", doc.to_string())
     }
 }
