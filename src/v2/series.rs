@@ -271,8 +271,7 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> ContinuousSeries<X, Y> {
                     ));
                 }
                 state.line_to(canvas.transform(*mz, *inten))
-            })
-            .close();
+            });
         let path = Path::new().set("fill", "none").set("d", path_data);
         let group = Group::new();
         group
@@ -374,6 +373,7 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> AnnotationSeries<X, Y> {
         yiter: impl Iterator<Item = Y>,
         text_iter: impl Iterator<Item = String>,
         description: SeriesDescription,
+        text_props: TextProps,
     ) -> Self {
         Self {
             points: xiter
@@ -382,7 +382,7 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> AnnotationSeries<X, Y> {
                 .map(|((x, y), text)| (x, y, text))
                 .collect(),
             description,
-            text_props: TextProps::default(),
+            text_props,
         }
     }
 
