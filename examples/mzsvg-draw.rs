@@ -6,11 +6,11 @@ use clap::Parser;
 use mzdata;
 use mzdata::prelude::*;
 #[allow(unused)]
-use mzdata::spectrum::{SignalContinuity, SpectrumLike};
+use mzdata::spectrum::{SignalContinuity, SpectrumLike, RefPeakDataLevel};
+use mzpeaks::peak::MZPoint;
 use mzsvg::SpectrumSVG;
 
-use mzsvg::util::{MZRange, Dimensions};
-
+use mzsvg::util::{Dimensions, MZRange};
 
 #[derive(Parser, Default, Debug)]
 struct App {
@@ -26,11 +26,19 @@ struct App {
     #[arg(short='d', long="dimensions", default_value_t=Dimensions(600, 200))]
     dimensions: Dimensions,
 
-    #[arg(short='o', long="output-path", default_value="image.svg", help="Where to save the image to.")]
+    #[arg(
+        short = 'o',
+        long = "output-path",
+        default_value = "image.svg",
+        help = "Where to save the image to."
+    )]
     output_path: String,
 
-    #[arg(short = 'r', long = "reprofile", default_value_t = false)]
+    #[arg(short = 'r', long = "reprofile", default_value_t = false, help="Reprofile spectra which are centroided")]
     reprofile: bool,
+
+    #[arg(long, help="Apply noise reduction with this scale")]
+    denoise: Option<f32>,
 
     #[arg(long = "pdf", default_value_t = false)]
     pdf: bool,
@@ -54,7 +62,38 @@ fn main() -> io::Result<()> {
     if let Some(mut spectrum) = spectrum {
         let _has_deconv = spectrum.try_build_deconvoluted_centroids().is_ok();
         let has_centroid = spectrum.try_build_centroids().is_ok();
+
+        if spectrum.signal_continuity() == SignalContinuity::Profile {
+            if let Some(scale) = args.denoise {
+                spectrum.denoise(scale).unwrap();
+            }
+        }
+
+        let peaks = spectrum.peaks();
+        let (raw_start_mz, raw_end_mz) = peaks.mz_range();
+        let start_mz = args.mz_range.start.unwrap_or(raw_start_mz);
+        let end_mz = args.mz_range.end.unwrap_or(raw_end_mz);
+
+        let ymax_in_range = match peaks {
+            RefPeakDataLevel::RawData(arr) => {
+                let mzs = arr.mzs()?;
+                let intens = arr.intensities()?;
+                mzs.iter().zip(intens.iter()).map(|(mz, int)| MZPoint::new(*mz, *int)).filter(|p| {
+                    start_mz <= p.mz && p.mz <= end_mz
+                }).map(|p| p.intensity).reduce(|a, b| {
+                    a.max(b)
+                }).unwrap_or_default()
+            },
+            _ => peaks.iter().filter(|p| {
+                start_mz <= p.mz && p.mz <= end_mz
+            }).map(|p| p.intensity).reduce(|a, b| {
+                a.max(b)
+            }).unwrap_or_default()
+        };
         document.axes_from(&spectrum).xlim(args.mz_range);
+        if args.mz_range.start.is_some() || args.mz_range.end.is_some() {
+            document.ylim(0.0..ymax_in_range);
+        }
         document.draw_spectrum(&spectrum);
 
         if has_centroid

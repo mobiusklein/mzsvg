@@ -156,7 +156,7 @@ impl Default for SpectrumSVG {
                 .id("x-axis"),
             yticks: AxisProps::new(AxisOrientation::Left)
                 .label("Intensity")
-                .tick_format(AxisTickLabelStyle::Percentile(2))
+                .tick_format(AxisTickLabelStyle::SciNot(2))
                 .id("y-axis"),
             x_range: Default::default(),
             y_range: Default::default(),
@@ -234,6 +234,26 @@ impl SpectrumSVG {
             let x = self.x_range.as_mut().unwrap();
             x.start = x.start.min(min_mz);
             x.end = x.end.max(max_mz);
+        }
+
+        self.canvas
+            .update_scales(self.x_range.clone().unwrap(), self.y_range.clone().unwrap());
+
+        self
+    }
+
+    pub fn ylim(&mut self, ylim: impl RangeBounds<f32>) -> &mut Self {
+        let axis = self.y_range.as_mut().unwrap();
+        match ylim.start_bound() {
+            Bound::Included(v) => axis.end = *v,
+            Bound::Excluded(v) => axis.end = *v,
+            Bound::Unbounded => {}
+        }
+
+        match ylim.end_bound() {
+            Bound::Included(v) => axis.start = *v,
+            Bound::Excluded(v) => axis.start = *v,
+            Bound::Unbounded => {}
         }
 
         self.canvas
@@ -486,6 +506,26 @@ impl FeatureSVG {
             let x = self.x_range.as_mut().unwrap();
             x.start = x.start.min(start_time);
             x.end = x.end.max(end_time);
+        }
+
+        self.canvas
+            .update_scales(self.x_range.clone().unwrap(), self.y_range.clone().unwrap());
+
+        self
+    }
+
+    pub fn ylim(&mut self, ylim: impl RangeBounds<f32>) -> &mut Self {
+        let axis = self.y_range.as_mut().unwrap();
+        match ylim.start_bound() {
+            Bound::Included(v) => axis.end = *v,
+            Bound::Excluded(v) => axis.end = *v,
+            Bound::Unbounded => {}
+        }
+
+        match ylim.end_bound() {
+            Bound::Included(v) => axis.start = *v,
+            Bound::Excluded(v) => axis.start = *v,
+            Bound::Unbounded => {}
         }
 
         self.canvas
