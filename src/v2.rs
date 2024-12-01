@@ -7,5 +7,5 @@ pub use chart_regions::{AxisOrientation, AxisProps, AxisTickLabelStyle, Canvas, 
 pub use series::{
     peaks_to_arrays, AsSeries, CentroidSeries, ContinuousSeries, DeconvolutedCentroidSeries,
     LineSeries, PlotSeries, SeriesDescription, AnnotationSeries, TraceSeries, ColorCycle,
-    ScatterSeries, DEFAULT_COLOR_CYCLE, PrecursorSeries
+    ScatterSeries, DEFAULT_COLOR_CYCLE, PrecursorSeries, PlotPeak,
 };

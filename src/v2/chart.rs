@@ -27,10 +27,14 @@ use super::series::{
 
 use crate::{AsSeries, CoordinateRange};
 
-trait SVGCanvas {
+pub trait SVGCanvas {
     fn get_canvas(&self) -> &Canvas<f64, f32>;
 
+    fn get_canvas_mut(&mut self) -> &mut Canvas<f64, f32>;
+
     fn make_document(&self) -> Document;
+
+    fn render_canvas(&self) -> Group;
 
     fn to_string(&self) -> String {
         self.make_document().to_string()
@@ -174,6 +178,14 @@ impl SVGCanvas for SpectrumSVG {
 
     fn make_document(&self) -> Document {
         self.make_document()
+    }
+
+    fn render_canvas(&self) -> Group {
+        self.render_canvas()
+    }
+
+    fn get_canvas_mut(&mut self) -> &mut Canvas<f64, f32> {
+        &mut self.canvas
     }
 }
 
@@ -396,13 +408,21 @@ impl SpectrumSVG {
         self.finished = true;
     }
 
+    pub fn render_canvas(&self) -> Group {
+        self.canvas.to_svg(&self.xticks, &self.yticks)
+    }
+
+    pub fn compose_with(&mut self, canvas: impl SVGCanvas) {
+        self.canvas_mut().push_layer(canvas.render_canvas());
+    }
+
     fn make_document(&self) -> Document {
         let mut document = Document::new();
         if let Some(css) = self.custom_css.as_ref() {
             let style = CSSStyle::new(css.to_string());
             document.append(style);
         }
-        document.append(self.canvas.to_svg(&self.xticks, &self.yticks));
+        document.append(self.render_canvas());
         document
     }
 
@@ -459,6 +479,14 @@ impl SVGCanvas for FeatureSVG {
 
     fn make_document(&self) -> Document {
         self.make_document()
+    }
+
+    fn render_canvas(&self) -> Group {
+        self.canvas.to_svg(&self.xticks, &self.yticks)
+    }
+
+    fn get_canvas_mut(&mut self) -> &mut Canvas<f64, f32> {
+        &mut self.canvas
     }
 }
 
@@ -561,13 +589,21 @@ impl FeatureSVG {
         self.finished = true;
     }
 
+    pub fn render_canvas(&self) -> Group {
+        self.canvas.to_svg(&self.xticks, &self.yticks)
+    }
+
+    pub fn compose_with(&mut self, canvas: impl SVGCanvas) {
+        self.canvas_mut().push_layer(canvas.render_canvas());
+    }
+
     fn make_document(&self) -> Document {
         let mut document = Document::new();
         if let Some(css) = self.custom_css.as_ref() {
             let style = CSSStyle::new(css.to_string());
             document.append(style);
         }
-        document.append(self.canvas.to_svg(&self.xticks, &self.yticks));
+        document.append(self.render_canvas());
         document
     }
 

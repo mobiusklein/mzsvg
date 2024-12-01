@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use mzdata::spectrum::{Precursor, PrecursorSelection};
 use mzpeaks::{
     feature::{ChargedFeature, Feature, FeatureLike, SimpleFeature},
+    peak_set::PeakSetVec,
     CentroidLike, CentroidPeak, DeconvolutedCentroidLike, DeconvolutedPeak, DeconvolutedPeakSet,
     IntensityMeasurement, MZLocated, MZPeakSetType, MassPeakSetType, PeakSet,
 };
@@ -259,19 +260,19 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> ContinuousSeries<X, Y> {
             .copied()
             .unwrap_or((X::zero(), Y::zero()))
             .0;
-        let path_data = self
-            .points
-            .iter()
-            .enumerate()
-            .fold(PathData::new(), |mut state, (i, (mz, inten))| {
-                if i == 0 {
-                    state = state.move_to((
-                        canvas.x_axis.scale.transform(min_mz).to_f64().unwrap(),
-                        canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
-                    ));
-                }
-                state.line_to(canvas.transform(*mz, *inten))
-            });
+        let path_data =
+            self.points
+                .iter()
+                .enumerate()
+                .fold(PathData::new(), |mut state, (i, (mz, inten))| {
+                    if i == 0 {
+                        state = state.move_to((
+                            canvas.x_axis.scale.transform(min_mz).to_f64().unwrap(),
+                            canvas.y_axis.scale.transform(Y::zero()).to_f64().unwrap(),
+                        ));
+                    }
+                    state.line_to(canvas.transform(*mz, *inten))
+                });
         let path = Path::new().set("fill", "none").set("d", path_data);
         let group = Group::new();
         group
@@ -519,14 +520,6 @@ impl<X: RenderCoordinate, Y: RenderCoordinate, T: CentroidLike + Clone + 'static
     }
 }
 
-impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for PeakSet {
-    type Series = CentroidSeries<X, Y, CentroidPeak>;
-
-    fn as_series(&self) -> Self::Series {
-        CentroidSeries::from_iterator(self.iter().cloned(), "centroid".into())
-    }
-}
-
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct DeconvolutedCentroidSeries<
     X: RenderCoordinate,
@@ -606,14 +599,6 @@ impl<
         let proxy = ContinuousSeries::new(points, self.description.clone());
         let group = proxy.to_svg(canvas);
         group
-    }
-}
-
-impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for DeconvolutedPeakSet {
-    type Series = DeconvolutedCentroidSeries<X, Y, DeconvolutedPeak>;
-
-    fn as_series(&self) -> Self::Series {
-        Self::Series::from_iterator(self.iter().cloned(), "deconvoluted-centroid".into())
     }
 }
 
@@ -707,6 +692,7 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> AsSeries<X, Y> for Precursor {
     }
 }
 
+/// Draw a signal-over-time graphic for features like LC-MS or IM-MS features
 pub struct TraceSeries<X: RenderCoordinate, Y: RenderCoordinate, C1, C2, F: FeatureLike<C1, C2>> {
     pub feature: F,
     points: Vec<(X, Y)>,
@@ -862,7 +848,13 @@ where
     }
 }
 
-pub struct ScatterSeries<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone> {
+
+/// Draw a scatter plot
+pub struct ScatterSeries<
+    X: RenderCoordinate,
+    Y: RenderCoordinate,
+    R: Into<svg::node::Value> + Clone,
+> {
     pub points: Vec<(X, Y, R)>,
     pub description: SeriesDescription,
 }
@@ -879,18 +871,20 @@ impl<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone
     }
 
     fn to_svg(&self, canvas: &Canvas<X, Y>) -> Group {
-        self.points.iter().fold(Group::new(), |group, (x, y, r)| {
-            group.add(
-                Circle::new()
-                    .set("cx", canvas.x_axis.scale.transform(*x).to_f64().unwrap())
-                    .set("cy", canvas.y_axis.scale.transform(*y).to_f64().unwrap())
-                    .set("r", r.clone())
-            )
-        })
-        .set("class", self.series_type())
-        .set("id", self.series_id())
-        .set("fill", self.color())
-        .set("stroke", "black")
+        self.points
+            .iter()
+            .fold(Group::new(), |group, (x, y, r)| {
+                group.add(
+                    Circle::new()
+                        .set("cx", canvas.x_axis.scale.transform(*x).to_f64().unwrap())
+                        .set("cy", canvas.y_axis.scale.transform(*y).to_f64().unwrap())
+                        .set("r", r.clone()),
+                )
+            })
+            .set("class", self.series_type())
+            .set("id", self.series_id())
+            .set("fill", self.color())
+            .set("stroke", "black")
     }
 
     fn slice_x(&mut self, start: X, end: X) {
@@ -908,12 +902,54 @@ impl<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone
     }
 }
 
-impl<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone> ScatterSeries<X, Y, R> {
+impl<X: RenderCoordinate, Y: RenderCoordinate, R: Into<svg::node::Value> + Clone>
+    ScatterSeries<X, Y, R>
+{
     pub fn new(points: Vec<(X, Y, R)>, description: SeriesDescription) -> Self {
         Self {
             points,
             description,
         }
+    }
+}
+
+
+/// A peak type-centric series function that allows one to define
+/// plotting behaviors for a custom peak type. More practical for
+/// newtype-ing than implementing a new peak collection.
+pub trait PlotPeak<X: RenderCoordinate, Y: RenderCoordinate> {
+    type SeriesType: PlotSeries<X, Y>;
+
+    fn series_from_iterator(iter: impl Iterator<Item = Self>) -> Self::SeriesType;
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> PlotPeak<X, Y> for CentroidPeak {
+    type SeriesType = CentroidSeries<X, Y, Self>;
+
+    fn series_from_iterator(iter: impl Iterator<Item = Self>) -> Self::SeriesType {
+        CentroidSeries::from_iterator(iter, "centroid".into())
+    }
+}
+
+impl<X: RenderCoordinate, Y: RenderCoordinate> PlotPeak<X, Y> for DeconvolutedPeak {
+    type SeriesType = DeconvolutedCentroidSeries<X, Y, Self>;
+
+    fn series_from_iterator(iter: impl Iterator<Item = Self>) -> Self::SeriesType {
+        DeconvolutedCentroidSeries::from_iterator(iter, "deconvoluted-centroid".into())
+    }
+}
+
+impl<
+        X: RenderCoordinate,
+        Y: RenderCoordinate,
+        T: PlotPeak<X, Y> + mzpeaks::IndexedCoordinate<C> + Clone,
+        C,
+    > AsSeries<X, Y> for PeakSetVec<T, C>
+{
+    type Series = T::SeriesType;
+
+    fn as_series(&self) -> Self::Series {
+        T::series_from_iterator(self.iter().cloned())
     }
 }
 

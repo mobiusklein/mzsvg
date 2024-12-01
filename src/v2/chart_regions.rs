@@ -10,7 +10,6 @@ pub trait RenderCoordinate: Float + Display + LowerExp {}
 
 impl<T: Float + Display + LowerExp> RenderCoordinate for T {}
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisOrientation {
     Top,
@@ -29,6 +28,7 @@ impl AxisOrientation {
     }
 }
 
+#[allow(unused)]
 #[derive(Default, Debug, Clone, Copy)]
 pub struct Sides {
     pub top: f64,
@@ -37,7 +37,7 @@ pub struct Sides {
     pub left: f64,
 }
 
-
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct DrawBox<X: RenderCoordinate, Y: RenderCoordinate> {
     pub width: usize,
@@ -59,7 +59,14 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> DrawBox<X, Y> {
         let range = domain.clone();
         let y_axis = YAxis::new(Scale::new(domain, range));
 
-        Self { width, height, x_axis, y_axis, groups, origin }
+        Self {
+            width,
+            height,
+            x_axis,
+            y_axis,
+            groups,
+            origin,
+        }
     }
 
     pub fn update_scales(&mut self, x_range: CoordinateRange<X>, y_range: CoordinateRange<Y>) {
@@ -79,15 +86,15 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> DrawBox<X, Y> {
     }
 
     pub fn to_svg(&self) -> Group {
-        let group = self.groups.iter().fold(
-            Group::new().set("class", "draw-box"),
-            |holder, series| holder.add(series.clone()),
-        );
+        let group = self
+            .groups
+            .iter()
+            .fold(Group::new().set("class", "draw-box"), |holder, series| {
+                holder.add(series.clone())
+            });
         group
     }
-
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Canvas<X: RenderCoordinate, Y: RenderCoordinate> {
@@ -96,10 +103,14 @@ pub struct Canvas<X: RenderCoordinate, Y: RenderCoordinate> {
     pub x_axis: XAxis<X>,
     pub y_axis: YAxis<Y>,
     pub groups: Vec<Group>,
-    pub subplot_offset: Option<(X, Y)>
+    pub subplot_offset: Option<(X, Y)>,
 }
 
 impl<X: RenderCoordinate, Y: RenderCoordinate> Canvas<X, Y> {
+    pub fn is_domain_initialized(&self) -> bool {
+        self.x_axis.is_well_formed()
+    }
+
     pub fn new(width: usize, height: usize) -> Self {
         let domain = CoordinateRange::new(X::zero(), X::from(width).unwrap());
         let range = domain.clone();
@@ -115,7 +126,7 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> Canvas<X, Y> {
             x_axis,
             y_axis,
             groups: Vec::new(),
-            subplot_offset: None
+            subplot_offset: None,
         }
     }
 
@@ -136,21 +147,35 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> Canvas<X, Y> {
     }
 
     pub fn to_svg(&self, x_axis_props: &AxisProps<X>, y_axis_props: &AxisProps<Y>) -> Group {
+        let canvas_id = uuid::Uuid::new_v4();
         let data = self.groups.iter().fold(
-            Group::new().set("class", "data-canvas"),
+            Group::new()
+                .set("class", "data-canvas")
+                .set("id", format!("data-canvas-{}", canvas_id)),
             |holder, series| holder.add(series.clone()),
         );
 
-        let group = Group::new()
-            .set(
-                "transform",
+        let mut container_translate = format!(
+            "translate({}, {})",
+            y_axis_props.tick_spacing() * 6.0,
+            x_axis_props.tick_spacing() * 4.0
+        );
+
+        if let Some((x, y)) = self.subplot_offset {
+            container_translate.push_str(
                 format!(
                     "translate({}, {})",
-                    y_axis_props.tick_spacing() * 6.0,
-                    x_axis_props.tick_spacing() * 4.0
-                ),
-            )
-            .set("class", "canvas")
+                    x.to_f64().unwrap(),
+                    y.to_f64().unwrap()
+                )
+                .as_str(),
+            );
+        }
+
+        let group = Group::new()
+            .set("transform", container_translate)
+            .set("class", "canvas-container")
+            .set("id", format!("canvas-container-{}", canvas_id))
             .add(data)
             .add(x_axis_props.to_svg(&self.x_axis.scale, &self))
             .add(y_axis_props.to_svg(&self.y_axis.scale, &self));
@@ -165,6 +190,10 @@ pub struct XAxis<T: Float> {
 }
 
 impl<T: Float> XAxis<T> {
+    pub fn is_well_formed(&self) -> bool {
+        self.scale.is_well_formed()
+    }
+
     pub fn new(scale: Scale<T>) -> Self {
         Self { scale }
     }
@@ -184,6 +213,10 @@ pub struct YAxis<T: Float> {
 }
 
 impl<T: Float> YAxis<T> {
+    pub fn is_well_formed(&self) -> bool {
+        self.scale.is_well_formed()
+    }
+
     pub fn new(scale: Scale<T>) -> Self {
         Self { scale }
     }
@@ -207,12 +240,15 @@ fn translate_y<T: Float>(y: T) -> String {
     format!("translate(0, {y})")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AxisTickLabelStyle {
     Precision(usize),
     #[allow(unused)]
     SciNot(usize),
-    Percentile(usize),
+    Percentile {
+        precision: usize,
+        maximum: Option<f64>,
+    },
 }
 
 impl Default for AxisTickLabelStyle {
@@ -222,22 +258,21 @@ impl Default for AxisTickLabelStyle {
 }
 
 impl AxisTickLabelStyle {
-    pub fn format<F: RenderCoordinate>(
-        &self,
-        value: &F,
-        scale: &CoordinateRange<F>,
-    ) -> String {
+    pub fn format<F: RenderCoordinate>(&self, value: &F, scale: &CoordinateRange<F>) -> String {
         match self {
             AxisTickLabelStyle::Precision(p) => format!("{1:.*}", p, value),
             AxisTickLabelStyle::SciNot(p) => format!("{1:.*e}", p, value),
-            AxisTickLabelStyle::Percentile(p) => {
-                let percent = (*value / scale.max()).to_f64().unwrap() * 100.0;
-                format!("{1:.*}%", p, percent)
+            AxisTickLabelStyle::Percentile { precision, maximum } => {
+                let maximum = maximum.unwrap_or_else(|| scale.max().to_f64().unwrap());
+                let value = value.to_f64().unwrap();
+                let percent = value / maximum * 100.0;
+                format!("{1:.*}%", precision, percent)
             }
         }
     }
 }
 
+#[allow(unused)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AxisLabelOptions {
     pub tick_count: usize,
@@ -258,6 +293,7 @@ pub struct AxisProps<T: RenderCoordinate> {
     pub id: Option<String>,
     pub tick_label_size: Option<f64>,
     pub axis_label_size: Option<f64>,
+    pub visible_ticks: bool,
 }
 
 pub const DEFAULT_TICK_LABEL_SIZE: f64 = 10.0;
@@ -276,6 +312,7 @@ impl<T: RenderCoordinate> AxisProps<T> {
             id: None,
             tick_label_size: None,
             axis_label_size: None,
+            visible_ticks: true,
         }
     }
 
@@ -370,38 +407,40 @@ impl<T: RenderCoordinate> AxisProps<T> {
             .set("d", path);
         container = container.add(path);
 
-        container = values
-            .iter()
-            .enumerate()
-            .map(|(_, v)| {
-                let range_v = scale.transform(*v).to_f64().unwrap();
-                // eprintln!("Tick {i} {0} -> {range_v}", v.to_f64().unwrap());
-                let tick_container = Group::new().set("class", "tick").set(
-                    "transform",
-                    if self.axis_orientation.is_horizontal() {
-                        translate_x(range_v)
-                    } else {
-                        translate_y(range_v)
-                    },
-                );
-                let line = Line::new().set("stroke", "black").set("stroke-width", 0.75);
-                let line = match self.axis_orientation {
-                    AxisOrientation::Top => line.set("y2", -self.tick_size_inner),
-                    AxisOrientation::Right => line.set("x2", self.tick_size_inner),
-                    AxisOrientation::Bottom => line.set("y2", self.tick_size_inner),
-                    AxisOrientation::Left => line.set("x2", -self.tick_size_inner),
-                };
-                let label =
-                    Text::new(self.tick_format.format(v, &scale.domain)).set("fill", "black");
-                let label = match self.axis_orientation {
-                    AxisOrientation::Top => label.set("y", -spacing).set("dy", "-0.32em"),
-                    AxisOrientation::Right => label.set("x", spacing).set("dy", "0.32em"),
-                    AxisOrientation::Bottom => label.set("y", spacing).set("dy", "0.32em"),
-                    AxisOrientation::Left => label.set("x", -spacing).set("dy", "0.32em"),
-                };
-                tick_container.add(label).add(line)
-            })
-            .fold(container, |container, tick| container.add(tick));
+        if self.visible_ticks {
+            container = values
+                .iter()
+                .enumerate()
+                .map(|(_, v)| {
+                    let range_v = scale.transform(*v).to_f64().unwrap();
+                    // eprintln!("Tick {i} {0} -> {range_v}", v.to_f64().unwrap());
+                    let tick_container = Group::new().set("class", "tick").set(
+                        "transform",
+                        if self.axis_orientation.is_horizontal() {
+                            translate_x(range_v)
+                        } else {
+                            translate_y(range_v)
+                        },
+                    );
+                    let line = Line::new().set("stroke", "black").set("stroke-width", 0.75);
+                    let line = match self.axis_orientation {
+                        AxisOrientation::Top => line.set("y2", -self.tick_size_inner),
+                        AxisOrientation::Right => line.set("x2", self.tick_size_inner),
+                        AxisOrientation::Bottom => line.set("y2", self.tick_size_inner),
+                        AxisOrientation::Left => line.set("x2", -self.tick_size_inner),
+                    };
+                    let label =
+                        Text::new(self.tick_format.format(v, &scale.domain)).set("fill", "black");
+                    let label = match self.axis_orientation {
+                        AxisOrientation::Top => label.set("y", -spacing).set("dy", "-0.32em"),
+                        AxisOrientation::Right => label.set("x", spacing).set("dy", "0.32em"),
+                        AxisOrientation::Bottom => label.set("y", spacing).set("dy", "0.32em"),
+                        AxisOrientation::Left => label.set("x", -spacing).set("dy", "0.32em"),
+                    };
+                    tick_container.add(label).add(line)
+                })
+                .fold(container, |container, tick| container.add(tick));
+        }
 
         match self.axis_orientation {
             AxisOrientation::Top => {}
@@ -473,7 +512,7 @@ pub struct TextProps {
     pub text_size: f64,
     pub horizontal_alignment: HorizontalAlignment,
     pub font_family: String,
-    pub color: String
+    pub color: String,
 }
 
 impl TextProps {
@@ -492,7 +531,7 @@ impl Default for TextProps {
             text_size: 1.0,
             horizontal_alignment: HorizontalAlignment::Middle,
             font_family: "serif".to_string(),
-            color: "black".to_string()
+            color: "black".to_string(),
         }
     }
 }

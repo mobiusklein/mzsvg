@@ -11,6 +11,10 @@ impl<T: Float> CoordinateRange<T> {
         Self { start, end }
     }
 
+    pub fn is_well_formed(&self) -> bool {
+        (self.start.is_finite() && !self.start.is_nan()) && (self.end.is_finite() && !self.end.is_nan())
+    }
+
     pub fn size(&self) -> T {
         self.end - self.start
     }
@@ -83,6 +87,10 @@ pub struct Scale<T: Float> {
 
 #[allow(unused)]
 impl<T: Float> Scale<T> {
+    pub fn is_well_formed(&self) -> bool {
+        self.domain.is_well_formed() && self.range.is_well_formed()
+    }
+
     pub fn new(domain: CoordinateRange<T>, range: CoordinateRange<T>) -> Self {
         Self { domain, range }
     }
@@ -95,6 +103,29 @@ impl<T: Float> Scale<T> {
     pub fn inverse_transform(&self, value: T) -> T {
         let i = self.range.transform(value);
         self.domain.inverse_transform(i)
+    }
+}
+
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub enum SVGTransform {
+    #[default]
+    None,
+    Translate(f64, f64),
+    Scale(f64, f64),
+    Rotate(f64),
+    RotateAround(f64, f64, f64),
+}
+
+impl SVGTransform {
+    pub fn to_svg(&self) -> String {
+        match self {
+            SVGTransform::None => "".into(),
+            SVGTransform::Translate(x, y) => format!("translate({x} {y})"),
+            SVGTransform::Scale(x, y) => format!("scale({x} {y})"),
+            SVGTransform::Rotate(a) => format!("rotate({a})"),
+            SVGTransform::RotateAround(a, x, y) => format!("rotate({a} {x} {y})"),
+        }
     }
 }
 
