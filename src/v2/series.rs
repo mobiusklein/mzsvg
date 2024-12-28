@@ -4,8 +4,8 @@ use mzdata::spectrum::{Precursor, PrecursorSelection};
 use mzpeaks::{
     feature::{ChargedFeature, Feature, FeatureLike, SimpleFeature},
     peak_set::PeakSetVec,
-    CentroidLike, CentroidPeak, DeconvolutedCentroidLike, DeconvolutedPeak, DeconvolutedPeakSet,
-    IntensityMeasurement, MZLocated, MZPeakSetType, MassPeakSetType, PeakSet,
+    CentroidLike, CentroidPeak, DeconvolutedCentroidLike, DeconvolutedPeak,
+    IntensityMeasurement, MZLocated, MZPeakSetType, MassPeakSetType,
 };
 use num_traits::Float;
 
@@ -709,7 +709,7 @@ impl<X: RenderCoordinate, Y: RenderCoordinate, C1, C2, F: FeatureLike<C1, C2>>
     pub fn new(feature: F, description: SeriesDescription) -> Self {
         let points: Vec<(X, Y)> = feature
             .iter()
-            .map(|(_, time, inten)| (X::from(*time).unwrap(), Y::from(*inten).unwrap()))
+            .map(|(_, time, inten)| (X::from(time).unwrap(), Y::from(inten).unwrap()))
             .collect();
 
         Self {

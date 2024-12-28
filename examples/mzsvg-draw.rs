@@ -7,7 +7,6 @@ use mzdata;
 use mzdata::prelude::*;
 #[allow(unused)]
 use mzdata::spectrum::{RefPeakDataLevel, SignalContinuity, SpectrumLike};
-use mzpeaks::peak::MZPoint;
 
 use mzsvg::util::{Dimensions, MZRange};
 use mzsvg::{v2::AxisTickLabelStyle, SpectrumSVG};

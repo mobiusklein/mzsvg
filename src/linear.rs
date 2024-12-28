@@ -107,6 +107,7 @@ impl<T: Float> Scale<T> {
 }
 
 
+#[allow(unused)]
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum SVGTransform {
     #[default]
@@ -118,6 +119,7 @@ pub enum SVGTransform {
 }
 
 impl SVGTransform {
+    #[allow(unused)]
     pub fn to_svg(&self) -> String {
         match self {
             SVGTransform::None => "".into(),

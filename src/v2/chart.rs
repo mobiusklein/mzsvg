@@ -514,7 +514,7 @@ impl FeatureSVG {
     pub fn axes_from<X, Y, T: FeatureLike<X, Y>>(&mut self, feature: &T) -> &mut Self {
         let max_int = feature
             .iter()
-            .map(|(_, _, z)| *z)
+            .map(|(_, _, z)| z)
             .max_by(|a, b| a.total_cmp(b))
             .unwrap();
 

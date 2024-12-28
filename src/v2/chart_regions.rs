@@ -530,7 +530,7 @@ impl Default for TextProps {
         TextProps {
             text_size: 1.0,
             horizontal_alignment: HorizontalAlignment::Middle,
-            font_family: "serif".to_string(),
+            font_family: "sans-serif".to_string(),
             color: "black".to_string(),
         }
     }
