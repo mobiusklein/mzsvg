@@ -5,8 +5,7 @@ use clap::Parser;
 
 use mzdata;
 use mzdata::prelude::*;
-#[allow(unused)]
-use mzdata::spectrum::{RefPeakDataLevel, SignalContinuity, SpectrumLike};
+use mzdata::spectrum::{SignalContinuity, SpectrumLike};
 
 use mzsvg::util::{Dimensions, MZRange};
 use mzsvg::{v2::AxisTickLabelStyle, SpectrumSVG};
@@ -58,8 +57,9 @@ fn main() -> io::Result<()> {
     let scan_index = args.scan_number;
 
     let mut document = SpectrumSVG::with_size(args.dimensions.0, args.dimensions.1);
-    let mut reader = mzdata::MZReader::open_path(path)?;
-    let spectrum = reader.get_spectrum_by_index(scan_index);
+    let spectrum = mzdata::mz_read!(path.as_path(), reader => {
+        reader.get_spectrum_by_index(scan_index)
+    })?;
 
     if let Some(mut spectrum) = spectrum {
         let _has_deconv = spectrum.try_build_deconvoluted_centroids().is_ok();
@@ -100,7 +100,7 @@ fn main() -> io::Result<()> {
             && spectrum.signal_continuity() == SignalContinuity::Centroid
             && args.reprofile
         {
-            if let Ok(()) = spectrum.reprofile_with_shape(0.0025, 0.025) {
+            if let Ok(()) = spectrum.reprofile_with_shape(0.001, 0.025) {
                 document.draw_profile(spectrum.arrays.as_ref().unwrap());
             }
         }

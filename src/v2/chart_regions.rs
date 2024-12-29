@@ -135,6 +135,21 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> Canvas<X, Y> {
         self.y_axis.scale.domain = y_range;
     }
 
+    pub fn make_bounding_box(&self) -> PathData {
+        let x_range0 = self.x_axis.scale.range.min().to_f64().unwrap() - 1.0;
+        let x_range1 = self.x_axis.scale.range.max().to_f64().unwrap() + 1.0;
+        let y_range0 = self.y_axis.scale.range.min().to_f64().unwrap() - 1.0;
+        let y_range1 = self.y_axis.scale.range.max().to_f64().unwrap() + 1.0;
+
+        let path = PathData::default()
+            .move_to((x_range0, y_range0))
+            .line_by((x_range1, 0))
+            .line_by((x_range0, y_range1))
+            .line_by((-x_range1, 0))
+            .close();
+        path
+    }
+
     pub fn transform(&self, x: X, y: Y) -> (f64, f64) {
         (
             self.x_axis.scale.transform(x).to_f64().unwrap(),
@@ -172,14 +187,18 @@ impl<X: RenderCoordinate, Y: RenderCoordinate> Canvas<X, Y> {
             );
         }
 
+        let bbox = self.make_bounding_box();
+
         let group = Group::new()
             .set("transform", container_translate)
             .set("class", "canvas-container")
             .set("id", format!("canvas-container-{}", canvas_id))
-            .add(data)
+            .add(data.set(
+                "clip-path",
+                format!("path({})", svg::node::Value::from(bbox)),
+            ))
             .add(x_axis_props.to_svg(&self.x_axis.scale, &self))
             .add(y_axis_props.to_svg(&self.y_axis.scale, &self));
-
         group
     }
 }
@@ -346,6 +365,21 @@ impl<T: RenderCoordinate> AxisProps<T> {
         self.tick_size_outer + self.tick_size_inner.max(0.0) + self.tick_padding
     }
 
+    pub fn make_path_data(&self, scale: &Scale<T>) -> PathData {
+        let range0 = scale.range.min().to_f64().unwrap() - 1.0;
+        let range1 = scale.range.max().to_f64().unwrap() + 1.0;
+        let path = if self.axis_orientation.is_horizontal() {
+            PathData::default()
+                .move_to((range0, 0))
+                .line_by((range1, 0))
+        } else {
+            PathData::default()
+                .move_to((0, range0))
+                .line_by((0, range1))
+        };
+        path
+    }
+
     pub fn to_svg<X: RenderCoordinate, Y: RenderCoordinate>(
         &self,
         scale: &Scale<T>,
@@ -370,8 +404,6 @@ impl<T: RenderCoordinate> AxisProps<T> {
         });
 
         let spacing = self.tick_spacing();
-        let range0 = scale.range.min().to_f64().unwrap() - 1.0;
-        let range1 = scale.range.max().to_f64().unwrap() + 1.0;
 
         let mut container = Group::new().set("fill", "none").set(
             "font-size",
@@ -390,15 +422,7 @@ impl<T: RenderCoordinate> AxisProps<T> {
             AxisOrientation::Left => container.set("text-anchor", "end"),
         };
 
-        let path = if self.axis_orientation.is_horizontal() {
-            PathData::default()
-                .move_to((range0, 0))
-                .line_by((range1, 0))
-        } else {
-            PathData::default()
-                .move_to((0, range0))
-                .line_by((0, range1))
-        };
+        let path = self.make_path_data(scale);
         let path = Path::new()
             .set("fill", "none")
             .set("stroke", "black")
